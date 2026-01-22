@@ -1,20 +1,22 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect } from 'react'
+import { StatusBar } from 'expo-status-bar'
+import { NavigationContainer } from '@react-navigation/native'
+import TabNavigator from './src/navigation/TabNavigator'
+import useStore from './src/store/useStore'
+import { getTheme } from './src/theme/colors'
 
 export default function App() {
-  return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
-  );
-}
+  const { loadData, themeColor } = useStore()
+  const theme = getTheme(themeColor)
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  return (
+    <NavigationContainer>
+      <StatusBar style="auto" backgroundColor={theme.background} />
+      <TabNavigator />
+    </NavigationContainer>
+  )
+}
