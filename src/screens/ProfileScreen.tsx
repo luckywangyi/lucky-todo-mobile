@@ -434,12 +434,7 @@ const ProfileScreen = () => {
     ])
   }
 
-  useEffect(() => {
-    if (!user || syncing || !isSupabaseConfigured() || !supabase) return
-    if (lastAutoSyncUserId.current === user.id) return
-    lastAutoSyncUserId.current = user.id
-    runSync(false)
-  }, [user, syncing])
+  // No auto-sync in local-only version
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -448,34 +443,13 @@ const ProfileScreen = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Card - flat primary background */}
+        {/* Profile Card */}
         <View style={[styles.profileCard, { backgroundColor: theme.primary }]}>
-          {user ? (
-            <>
-              <View style={styles.avatarRing}>
-                <Image
-                  source={{ uri: user.avatar_url || 'https://via.placeholder.com/80' }}
-                  style={styles.avatar}
-                />
-              </View>
-              <Text style={styles.userName}>{user.full_name || '用户'}</Text>
-              <Text style={styles.userEmail}>{user.email}</Text>
-              <View style={styles.connectedBadge}>
-                <Ionicons name="cloud-done" size={13} color="white" />
-                <Text style={styles.connectedText}>
-                  已连接{lastSyncAt ? ` · ${new Date(lastSyncAt).toLocaleTimeString()}` : ''}
-                </Text>
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={styles.avatarPlaceholder}>
-                <Ionicons name="person" size={36} color="rgba(255,255,255,0.7)" />
-              </View>
-              <Text style={styles.userName}>未登录</Text>
-              <Text style={styles.userEmail}>登录后可同步数据到云端</Text>
-            </>
-          )}
+          <View style={styles.avatarPlaceholder}>
+            <Ionicons name="person" size={36} color="rgba(255,255,255,0.7)" />
+          </View>
+          <Text style={styles.userName}>Lucky Todo</Text>
+          <Text style={styles.userEmail}>本地版 · 数据仅存储在本机</Text>
         </View>
 
         {/* Stats */}
@@ -571,56 +545,19 @@ const ProfileScreen = () => {
           </View>
         </Card>
 
-        {/* Account settings */}
+        {/* Data info */}
         <Card theme={theme} style={styles.section}>
           <Text style={[typography.label, { color: theme.text, marginBottom: 12 }]}>
-            账户
+            数据
           </Text>
-          {user ? (
-            <>
-              <SettingsItem
-                icon="sync-outline"
-                label={syncing ? '同步中...' : '智能同步'}
-                sublabel="自动合并本地与云端数据"
-                onPress={handleSync}
-                theme={theme}
-                disabled={syncing}
-              />
-              <SettingsItem
-                icon="cloud-download-outline"
-                label="下载云端"
-                sublabel="用云端数据覆盖本地"
-                onPress={handleDownload}
-                theme={theme}
-                disabled={syncing}
-              />
-              <SettingsItem
-                icon="cloud-upload-outline"
-                label="上传本地"
-                sublabel="将本地数据上传到云端"
-                onPress={handleUpload}
-                theme={theme}
-                disabled={syncing}
-              />
-              <SettingsItem
-                icon="log-out-outline"
-                label="退出登录"
-                onPress={handleLogout}
-                theme={theme}
-                danger
-                showBorder={false}
-              />
-            </>
-          ) : (
-            <TouchableOpacity
-              style={styles.githubBtn}
-              onPress={handleGitHubLogin}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="logo-github" size={22} color="white" />
-              <Text style={styles.githubBtnText}>使用 GitHub 登录</Text>
-            </TouchableOpacity>
-          )}
+          <SettingsItem
+            icon="phone-portrait-outline"
+            label="本地存储"
+            sublabel="所有数据保存在本机"
+            onPress={() => {}}
+            theme={theme}
+            showBorder={false}
+          />
         </Card>
 
         {/* AI Settings */}
