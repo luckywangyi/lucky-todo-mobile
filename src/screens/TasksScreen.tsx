@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   View,
   Text,
@@ -6,250 +6,477 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Modal,
+  Alert,
+  ActivityIndicator,
 } from 'react-native'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, isToday, isTomorrow, isYesterday, isPast } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
 import useStore from '../store/useStore'
 import { getTheme } from '../theme/colors'
+import { typography } from '../theme/typography'
 import { Task, Priority } from '../types'
+import TaskCard from '../components/TaskCard'
+import FilterPills from '../components/FilterPills'
+import EmptyState from '../components/EmptyState'
+import BottomSheet from '../components/BottomSheet'
+import { parseNaturalLanguage, generateSubtasks, isAIConfigured, type ParsedTask } from '../services/ai'
+
+interface DateGroup {
+  date: string
+  label: string
+  tasks: Task[]
+  isToday: boolean
+  isPast: boolean
+}
+
+const filterOptions = [
+  { key: 'pending' as const, label: '待完成' },
+  { key: 'completed' as const, label: '已完成' },
+  { key: 'all' as const, label: '全部' },
+]
 
 const TasksScreen = () => {
-  const { tasks, themeColor, addTask, updateTask, deleteTask } = useStore()
+  const { tasks, themeColor, addTask, updateTask, deleteTask, toggleSubtask } = useStore()
   const theme = getTheme(themeColor)
   const [showAddModal, setShowAddModal] = useState(false)
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [newTaskPriority, setNewTaskPriority] = useState<Priority>('medium')
-  const [filter, setFilter] = useState<'all' | 'pending' | 'completed'>('all')
+  const [filter, setFilter] = useState<'all' | 'pending' | 'completed'>('pending')
 
-  const filteredTasks = useMemo(() => {
-    let result = [...tasks]
-    if (filter === 'pending') {
-      result = result.filter(t => t.status !== 'completed')
-    } else if (filter === 'completed') {
-      result = result.filter(t => t.status === 'completed')
+  // AI states
+  const [aiAvailable, setAiAvailable] = useState(false)
+  const [showAIModal, setShowAIModal] = useState(false)
+  const [aiInput, setAiInput] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiResult, setAiResult] = useState<ParsedTask | null>(null)
+  const [showSubtaskAI, setShowSubtaskAI] = useState(false)
+  const [aiSubLoading, setAiSubLoading] = useState(false)
+  const [aiSubtasks, setAiSubtasks] = useState<string[]>([])
+
+  useEffect(() => {
+    isAIConfigured().then(setAiAvailable)
+  }, [])
+
+  const handleAIParse = async () => {
+    if (!aiInput.trim() || aiLoading) return
+    setAiLoading(true)
+    try {
+      const result = await parseNaturalLanguage(aiInput, format(new Date(), 'yyyy-MM-dd'))
+      setAiResult(result)
+    } catch (err: any) {
+      Alert.alert('AI 解析失败', err?.message || '请重试')
     }
-    return result.sort((a, b) => 
-      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    )
+    setAiLoading(false)
+  }
+
+  const handleAIConfirm = () => {
+    if (!aiResult) return
+    addTask({
+      title: aiResult.title,
+      description: aiResult.description,
+      dueDate: aiResult.dueDate || format(new Date(), 'yyyy-MM-dd'),
+      priority: aiResult.priority || 'medium',
+      tags: aiResult.tags || [],
+      subtasks: (aiResult.subtasks || []).map((st, i) => ({
+        id: `subtask-ai-${Date.now()}-${i}`,
+        title: st,
+        completed: false,
+      })),
+      status: 'pending',
+      estimatedMinutes: aiResult.estimatedMinutes || 60,
+    })
+    setAiResult(null)
+    setAiInput('')
+    setShowAIModal(false)
+  }
+
+  const handleAISubtasks = async () => {
+    if (!newTaskTitle.trim() || aiSubLoading) return
+    setAiSubLoading(true)
+    try {
+      const result = await generateSubtasks(newTaskTitle, '')
+      setAiSubtasks(result.map(r => r.title))
+    } catch { /* ignore */ }
+    setAiSubLoading(false)
+  }
+
+  // Group tasks by date
+  const groupedTasks = useMemo(() => {
+    let filteredTasks = [...tasks]
+    if (filter === 'pending') {
+      filteredTasks = filteredTasks.filter(
+        (t) => t.status !== 'completed' && t.status !== 'cancelled'
+      )
+    } else if (filter === 'completed') {
+      filteredTasks = filteredTasks.filter((t) => t.status === 'completed')
+    }
+
+    const groups: { [key: string]: Task[] } = {}
+    filteredTasks.forEach((task) => {
+      const date = task.dueDate
+      if (!groups[date]) groups[date] = []
+      groups[date].push(task)
+    })
+
+    const result: DateGroup[] = Object.entries(groups)
+      .map(([date, tasks]) => {
+        const dateObj = parseISO(date)
+        let label = format(dateObj, 'M月d日 EEEE', { locale: zhCN })
+        if (isToday(dateObj)) label = '今天 · ' + format(dateObj, 'M月d日', { locale: zhCN })
+        else if (isTomorrow(dateObj)) label = '明天 · ' + format(dateObj, 'M月d日', { locale: zhCN })
+        else if (isYesterday(dateObj))
+          label = '昨天 · ' + format(dateObj, 'M月d日', { locale: zhCN })
+
+        return {
+          date,
+          label,
+          tasks: tasks.sort((a, b) => {
+            const po = { high: 0, medium: 1, low: 2 }
+            return po[a.priority] - po[b.priority]
+          }),
+          isToday: isToday(dateObj),
+          isPast: isPast(dateObj) && !isToday(dateObj),
+        }
+      })
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    return result
   }, [tasks, filter])
 
   const handleAddTask = () => {
     if (!newTaskTitle.trim()) return
-    
     addTask({
       title: newTaskTitle.trim(),
       dueDate: format(new Date(), 'yyyy-MM-dd'),
       priority: newTaskPriority,
       tags: [],
-      subtasks: [],
+      subtasks: aiSubtasks.map((st, i) => ({
+        id: `subtask-${Date.now()}-${i}`,
+        title: st,
+        completed: false,
+      })),
       status: 'pending',
     })
-    
     setNewTaskTitle('')
+    setAiSubtasks([])
     setShowAddModal(false)
   }
 
   const toggleTask = (task: Task) => {
-    updateTask(task.id, {
-      status: task.status === 'completed' ? 'pending' : 'completed',
-    })
+    updateTask(task.id, { status: task.status === 'completed' ? 'pending' : 'completed' })
   }
 
-  const priorityColors = {
-    high: '#EF4444',
-    medium: '#F59E0B',
-    low: '#10B981',
+  const handleDelete = (task: Task) => {
+    Alert.alert('确认删除', `确定要删除任务「${task.title}」吗？`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: () => deleteTask(task.id) },
+    ])
   }
+
+  const stats = useMemo(() => {
+    const pending = tasks.filter(
+      (t) => t.status !== 'completed' && t.status !== 'cancelled'
+    ).length
+    const completed = tasks.filter((t) => t.status === 'completed').length
+    return { pending, completed }
+  }, [tasks])
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* 头部 */}
+      {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.background }]}>
-        <Text style={[styles.title, { color: theme.text }]}>全部任务</Text>
-        <TouchableOpacity
-          style={[styles.addButton, { backgroundColor: theme.primary }]}
-          onPress={() => setShowAddModal(true)}
-        >
-          <Ionicons name="add" size={24} color="white" />
-        </TouchableOpacity>
-      </View>
-
-      {/* 筛选器 */}
-      <View style={styles.filterContainer}>
-        {(['all', 'pending', 'completed'] as const).map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[
-              styles.filterButton,
-              filter === f && { backgroundColor: theme.primary },
-            ]}
-            onPress={() => setFilter(f)}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                { color: filter === f ? 'white' : theme.textSecondary },
-              ]}
-            >
-              {f === 'all' ? '全部' : f === 'pending' ? '待完成' : '已完成'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* 任务列表 */}
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {filteredTasks.map(task => (
-          <TouchableOpacity
-            key={task.id}
-            style={[
-              styles.taskItem,
-              { 
-                backgroundColor: theme.card,
-                borderLeftColor: priorityColors[task.priority],
-              },
-            ]}
-            onPress={() => toggleTask(task)}
-            onLongPress={() => deleteTask(task.id)}
-          >
-            <View
-              style={[
-                styles.checkbox,
-                task.status === 'completed' && {
-                  backgroundColor: theme.success,
-                  borderColor: theme.success,
-                },
-              ]}
-            >
-              {task.status === 'completed' && (
-                <Ionicons name="checkmark" size={14} color="white" />
-              )}
-            </View>
-            <View style={styles.taskContent}>
-              <Text
-                style={[
-                  styles.taskTitle,
-                  { color: theme.text },
-                  task.status === 'completed' && styles.taskCompleted,
-                ]}
-                numberOfLines={1}
-              >
-                {task.title}
-              </Text>
-              <Text style={[styles.taskDate, { color: theme.textSecondary }]}>
-                {format(parseISO(task.dueDate), 'M月d日', { locale: zhCN })}
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={[typography.heading1, { color: theme.text }]}>全部任务</Text>
+            <View style={styles.headerStats}>
+              <Text style={[typography.caption, { color: theme.textSecondary }]}>
+                {stats.pending} 待完成 · {stats.completed} 已完成
               </Text>
             </View>
-          </TouchableOpacity>
-        ))}
-
-        {filteredTasks.length === 0 && (
-          <View style={styles.emptyState}>
-            <Ionicons name="document-text-outline" size={48} color={theme.textSecondary} />
-            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-              暂无任务
-            </Text>
           </View>
-        )}
-      </ScrollView>
-
-      {/* 添加任务模态框 */}
-      <Modal
-        visible={showAddModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowAddModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>
-                新建任务
-              </Text>
-              <TouchableOpacity onPress={() => setShowAddModal(false)}>
-                <Ionicons name="close" size={24} color={theme.textSecondary} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {aiAvailable && (
+              <TouchableOpacity
+                style={[styles.addButton, {
+                  backgroundColor: theme.card,
+                  borderWidth: 1.5,
+                  borderColor: theme.primary,
+                }]}
+                onPress={() => { setShowAIModal(true); setAiResult(null); setAiInput('') }}
+              >
+                <Ionicons name="sparkles" size={20} color={theme.primary} />
               </TouchableOpacity>
-            </View>
-
-            <TextInput
-              style={[
-                styles.input,
-                { 
-                  backgroundColor: theme.background,
-                  color: theme.text,
-                  borderColor: theme.border,
-                },
-              ]}
-              placeholder="任务标题"
-              placeholderTextColor={theme.textSecondary}
-              value={newTaskTitle}
-              onChangeText={setNewTaskTitle}
-              autoFocus
-            />
-
-            <Text style={[styles.label, { color: theme.text }]}>优先级</Text>
-            <View style={styles.priorityContainer}>
-              {(['high', 'medium', 'low'] as Priority[]).map((p) => (
-                <TouchableOpacity
-                  key={p}
-                  style={[
-                    styles.priorityButton,
-                    {
-                      backgroundColor:
-                        newTaskPriority === p
-                          ? priorityColors[p]
-                          : theme.background,
-                      borderColor: priorityColors[p],
-                    },
-                  ]}
-                  onPress={() => setNewTaskPriority(p)}
-                >
-                  <Text
-                    style={{
-                      color: newTaskPriority === p ? 'white' : priorityColors[p],
-                      fontWeight: '600',
-                    }}
-                  >
-                    {p === 'high' ? '高' : p === 'medium' ? '中' : '低'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
+            )}
             <TouchableOpacity
-              style={[styles.submitButton, { backgroundColor: theme.primary }]}
-              onPress={handleAddTask}
+              style={[styles.addButton, { backgroundColor: theme.primary }]}
+              onPress={() => { setShowAddModal(true); setAiSubtasks([]) }}
             >
-              <Text style={styles.submitText}>创建任务</Text>
+              <Ionicons name="add" size={24} color="white" />
             </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </View>
+
+      {/* Filter */}
+      <View style={[styles.filterWrapper, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border }]}>
+        <FilterPills
+          theme={theme}
+          options={filterOptions}
+          selected={filter}
+          onSelect={setFilter}
+        />
+      </View>
+
+      {/* Task list */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {groupedTasks.map((group) => (
+          <View key={group.date} style={styles.dateGroup}>
+            {/* Date header */}
+            <View style={styles.dateHeader}>
+              <Text style={[typography.label, { color: theme.textSecondary, flex: 1 }]}>
+                {group.label}
+              </Text>
+              <Text style={[typography.caption, { color: theme.textSecondary }]}>
+                {group.tasks.length} 个任务
+              </Text>
+            </View>
+
+            {/* Tasks */}
+            <View style={styles.tasksList}>
+              {group.tasks.map((task) => (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  theme={theme}
+                  onToggle={toggleTask}
+                  onDelete={handleDelete}
+                  onToggleSubtask={toggleSubtask}
+                />
+              ))}
+            </View>
+          </View>
+        ))}
+
+        {groupedTasks.length === 0 && (
+          <EmptyState
+            theme={theme}
+            icon={filter === 'completed' ? 'checkmark-done-outline' : 'calendar-outline'}
+            title={filter === 'completed' ? '暂无已完成任务' : '暂无待完成任务'}
+            subtitle={
+              filter === 'completed' ? '完成任务后会显示在这里' : '点击右上角添加新任务'
+            }
+            actionLabel={filter !== 'completed' ? '添加任务' : undefined}
+            onAction={filter !== 'completed' ? () => setShowAddModal(true) : undefined}
+          />
+        )}
+      </ScrollView>
+
+      {/* Add task bottom sheet */}
+      <BottomSheet
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        theme={theme}
+        title="新建任务"
+      >
+        <TextInput
+          style={[
+            styles.input,
+            { backgroundColor: theme.surfaceSecondary, color: theme.text, borderColor: theme.border },
+          ]}
+          placeholder="任务标题"
+          placeholderTextColor={theme.textSecondary}
+          value={newTaskTitle}
+          onChangeText={setNewTaskTitle}
+          autoFocus
+        />
+
+        <Text style={[typography.label, { color: theme.text, marginBottom: 12 }]}>优先级</Text>
+        <View style={styles.priorityRow}>
+          {(['high', 'medium', 'low'] as Priority[]).map((p) => {
+            const active = newTaskPriority === p
+            const labels = { high: '高', medium: '中', low: '低' }
+            const icons = { high: 'arrow-up', medium: 'remove', low: 'arrow-down' } as const
+
+            return (
+              <TouchableOpacity
+                key={p}
+                style={[
+                  styles.priorityPill,
+                  {
+                    backgroundColor: active ? theme.primary : theme.surfaceSecondary,
+                    borderColor: theme.border,
+                  },
+                ]}
+                onPress={() => setNewTaskPriority(p)}
+              >
+                <Ionicons
+                  name={icons[p]}
+                  size={18}
+                  color={active ? 'white' : theme.textSecondary}
+                />
+                <Text
+                  style={[
+                    typography.caption,
+                    {
+                      color: active ? 'white' : theme.textSecondary,
+                      fontWeight: '600',
+                      marginTop: 4,
+                    },
+                  ]}
+                >
+                  {labels[p]}
+                </Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+
+        {/* AI subtask generation */}
+        {aiAvailable && newTaskTitle.trim().length > 0 && (
+          <View style={{ marginBottom: 16 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={[typography.label, { color: theme.text }]}>子任务</Text>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, backgroundColor: theme.primary + '18' }}
+                onPress={handleAISubtasks}
+                disabled={aiSubLoading}
+              >
+                {aiSubLoading ? (
+                  <ActivityIndicator size="small" color={theme.primary} />
+                ) : (
+                  <Ionicons name="sparkles-outline" size={14} color={theme.primary} />
+                )}
+                <Text style={[typography.small, { color: theme.primary, fontWeight: '600' }]}>AI 生成</Text>
+              </TouchableOpacity>
+            </View>
+            {aiSubtasks.map((st, i) => (
+              <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: theme.surfaceSecondary, borderRadius: 8, marginBottom: 4 }}>
+                <View style={{ width: 14, height: 14, borderRadius: 3, borderWidth: 1.5, borderColor: theme.border }} />
+                <Text style={[typography.body, { color: theme.text, flex: 1 }]} numberOfLines={1}>{st}</Text>
+                <TouchableOpacity onPress={() => setAiSubtasks(prev => prev.filter((_, idx) => idx !== i))}>
+                  <Ionicons name="close" size={16} color={theme.textSecondary} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[styles.submitBtn, { backgroundColor: theme.primary }]}
+          onPress={handleAddTask}
+        >
+          <Ionicons name="add-circle-outline" size={20} color="white" />
+          <Text style={styles.submitBtnText}>创建任务</Text>
+        </TouchableOpacity>
+      </BottomSheet>
+
+      {/* AI create task modal */}
+      <BottomSheet
+        visible={showAIModal}
+        onClose={() => { setShowAIModal(false); setAiResult(null) }}
+        theme={theme}
+        title="AI 创建任务"
+      >
+        <TextInput
+          style={[styles.input, { backgroundColor: theme.surfaceSecondary, color: theme.text, borderColor: theme.border }]}
+          placeholder='用自然语言描述，如"明天下午复习算法2小时"'
+          placeholderTextColor={theme.textSecondary}
+          value={aiInput}
+          onChangeText={setAiInput}
+          multiline
+        />
+        {!aiResult && (
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: theme.primary, opacity: aiLoading || !aiInput.trim() ? 0.5 : 1 }]}
+            onPress={handleAIParse}
+            disabled={aiLoading || !aiInput.trim()}
+          >
+            {aiLoading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="sparkles-outline" size={20} color="white" />
+            )}
+            <Text style={styles.submitBtnText}>AI 解析</Text>
+          </TouchableOpacity>
+        )}
+        {aiResult && (
+          <View style={{ gap: 12 }}>
+            <View style={{ padding: 14, borderRadius: 12, backgroundColor: theme.surfaceSecondary, gap: 6 }}>
+              <Text style={[typography.bodyMedium, { color: theme.text }]}>{aiResult.title}</Text>
+              {aiResult.description ? (
+                <Text style={[typography.small, { color: theme.textSecondary }]}>{aiResult.description}</Text>
+              ) : null}
+              <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                {aiResult.dueDate ? (
+                  <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, backgroundColor: theme.card }}>
+                    <Text style={[typography.small, { color: theme.textSecondary }]}>{aiResult.dueDate}</Text>
+                  </View>
+                ) : null}
+                {aiResult.priority ? (
+                  <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, backgroundColor: aiResult.priority === 'high' ? '#FEE2E2' : aiResult.priority === 'medium' ? '#FEF3C7' : '#D1FAE5' }}>
+                    <Text style={{ fontSize: 12, color: aiResult.priority === 'high' ? '#DC2626' : aiResult.priority === 'medium' ? '#D97706' : '#059669' }}>
+                      {aiResult.priority === 'high' ? '高' : aiResult.priority === 'medium' ? '中' : '低'}优先级
+                    </Text>
+                  </View>
+                ) : null}
+                {aiResult.estimatedMinutes ? (
+                  <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, backgroundColor: theme.card }}>
+                    <Text style={[typography.small, { color: theme.textSecondary }]}>{aiResult.estimatedMinutes}分钟</Text>
+                  </View>
+                ) : null}
+              </View>
+              {aiResult.subtasks && aiResult.subtasks.length > 0 && (
+                <View style={{ marginTop: 4, gap: 3 }}>
+                  {aiResult.subtasks.map((st, i) => (
+                    <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <View style={{ width: 12, height: 12, borderRadius: 3, borderWidth: 1, borderColor: theme.border }} />
+                      <Text style={[typography.small, { color: theme.textSecondary }]}>{st}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: theme.primary, flex: 1 }]}
+                onPress={handleAIConfirm}
+              >
+                <Ionicons name="checkmark-circle-outline" size={20} color="white" />
+                <Text style={styles.submitBtnText}>创建任务</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: theme.surfaceSecondary, flex: 0 }]}
+                onPress={() => { setAiResult(null); setAiInput('') }}
+              >
+                <Ionicons name="refresh-outline" size={20} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </BottomSheet>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   header: {
+    paddingTop: 56,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+  },
+  headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 16,
+    alignItems: 'flex-start',
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
+  headerStats: {
+    marginTop: 8,
   },
   addButton: {
     width: 44,
@@ -257,92 +484,36 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  filterContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
+  filterWrapper: {
+    marginHorizontal: 20,
     marginBottom: 16,
-    gap: 8,
-  },
-  filterButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-  },
-  filterText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  scrollView: {
-    flex: 1,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
   },
   scrollContent: {
-    padding: 20,
-    paddingBottom: 100,
+    paddingHorizontal: 20,
+    paddingBottom: 120,
   },
-  taskItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 10,
-    borderLeftWidth: 4,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#CBD5E1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  taskContent: {
-    flex: 1,
-  },
-  taskTitle: {
-    fontSize: 15,
-    fontWeight: '500',
-  },
-  taskCompleted: {
-    textDecorationLine: 'line-through',
-    opacity: 0.6,
-  },
-  taskDate: {
-    fontSize: 12,
-    marginTop: 4,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 16,
-    marginTop: 12,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    paddingBottom: 40,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  dateGroup: {
     marginBottom: 24,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  dateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 10,
   },
+  tasksList: {
+    gap: 0,
+  },
+  // Bottom sheet content
   input: {
     padding: 16,
     borderRadius: 12,
@@ -350,29 +521,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 20,
   },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  priorityContainer: {
+  priorityRow: {
     flexDirection: 'row',
     gap: 12,
     marginBottom: 24,
   },
-  priorityButton: {
+  priorityPill: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
     alignItems: 'center',
-    borderWidth: 2,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
   },
-  submitButton: {
+  submitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     padding: 16,
     borderRadius: 12,
-    alignItems: 'center',
   },
-  submitText: {
+  submitBtnText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',

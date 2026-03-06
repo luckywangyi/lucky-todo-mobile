@@ -29,7 +29,17 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#0EA5E9",
+          "sounds": [],
+          "androidMode": "default",
+          "androidCollapsedTitle": "Lucky Todo"
+        }
+      ]
     ],
     "extra": {
       "eas": {

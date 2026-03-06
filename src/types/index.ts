@@ -26,6 +26,7 @@ export interface Task {
   estimatedMinutes?: number
   createdAt: string
   updatedAt: string
+  deletedAt?: string
 }
 
 // 时间块
@@ -35,6 +36,7 @@ export interface TimeSlot {
   date: string
   startTime: number // Minutes from midnight
   duration: number // Duration in minutes
+  updatedAt?: string
 }
 
 // 项目阶段
@@ -70,6 +72,7 @@ export interface Habit {
   customDays: number[]
   records: Record<string, boolean> // date -> completed
   createdAt: string
+  updatedAt?: string
 }
 
 // 用户信息
