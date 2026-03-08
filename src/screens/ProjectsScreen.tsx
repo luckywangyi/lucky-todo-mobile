@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
+  ActivityIndicator,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -17,6 +18,7 @@ import { Project, ProjectPhase } from '../types'
 import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
+import { isAIConfigured, generateProjectPlan } from '../services/ai'
 
 const projectColors = [
   { id: 'blue', color: '#3B82F6' },
@@ -44,12 +46,12 @@ const getPhaseProgress = (phase: ProjectPhase) => {
 
 const ProjectsScreen = () => {
   const {
-    projects, themeColor,
+    projects, themeColor, darkMode,
     addProject, updateProject, deleteProject,
     addProjectPhase, updateProjectPhase, deleteProjectPhase,
     toggleProjectTask,
   } = useStore()
-  const theme = getTheme(themeColor)
+  const theme = getTheme(themeColor, darkMode)
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -68,6 +70,49 @@ const ProjectsScreen = () => {
 
   // Add task form
   const [taskTitle, setTaskTitle] = useState('')
+
+  // AI project planning
+  const [aiAvailable, setAiAvailable] = useState(false)
+  const [aiPlanLoading, setAiPlanLoading] = useState(false)
+  useEffect(() => { isAIConfigured().then(setAiAvailable) }, [])
+
+  const handleAIGeneratePlan = async () => {
+    if (!newTitle.trim() || aiPlanLoading) return
+    setAiPlanLoading(true)
+    try {
+      const plan = await generateProjectPlan(newTitle.trim(), newDesc.trim())
+      addProject({
+        title: newTitle.trim(),
+        description: newDesc.trim(),
+        icon: newIcon,
+        color: newColor,
+        phases: [],
+        status: 'pending',
+      })
+      const newProjects = useStore.getState().projects
+      const created = newProjects[newProjects.length - 1]
+      if (created && plan.phases.length > 0) {
+        for (const phase of plan.phases) {
+          addProjectPhase(created.id, {
+            title: phase.title,
+            description: phase.description,
+            status: 'pending',
+            tasks: phase.tasks.map((t, i) => ({ id: `ai-${i}-${Date.now()}`, title: t.title, completed: false })),
+          })
+        }
+        setSelectedProject(created)
+      }
+      setNewTitle('')
+      setNewDesc('')
+      setNewIcon('📱')
+      setNewColor('#3B82F6')
+      setShowCreateModal(false)
+      Alert.alert('AI 规划完成', `已生成 ${plan.phases.length} 个阶段`)
+    } catch (err: any) {
+      Alert.alert('AI 规划失败', err?.message || '请重试')
+    }
+    setAiPlanLoading(false)
+  }
 
   const currentProject = useMemo(() => {
     if (!selectedProject) return null
@@ -413,13 +458,31 @@ const ProjectsScreen = () => {
           />
 
           {/* Submit */}
-          <TouchableOpacity
-            style={[styles.submitBtn, { backgroundColor: newColor, marginTop: 20, opacity: newTitle.trim() ? 1 : 0.5 }]}
-            onPress={handleCreateProject}
-            disabled={!newTitle.trim()}
-          >
-            <Text style={[typography.bodyMedium, { color: '#fff' }]}>创建项目</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+            <TouchableOpacity
+              style={[styles.submitBtn, { backgroundColor: newColor, flex: 1, opacity: newTitle.trim() ? 1 : 0.5 }]}
+              onPress={handleCreateProject}
+              disabled={!newTitle.trim()}
+            >
+              <Text style={[typography.bodyMedium, { color: '#fff' }]}>创建项目</Text>
+            </TouchableOpacity>
+            {aiAvailable && (
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: theme.primary, flex: 1, opacity: newTitle.trim() ? 1 : 0.5 }]}
+                onPress={handleAIGeneratePlan}
+                disabled={!newTitle.trim() || aiPlanLoading}
+              >
+                {aiPlanLoading ? (
+                  <ActivityIndicator size={14} color="#fff" />
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Ionicons name="sparkles" size={14} color="#fff" />
+                    <Text style={[typography.bodyMedium, { color: '#fff' }]}>AI 规划</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
         </ScrollView>
       </BottomSheet>
     </SafeAreaView>

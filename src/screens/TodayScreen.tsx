@@ -10,7 +10,11 @@ import {
   Dimensions,
   Animated,
   ActivityIndicator,
+  TextInput,
+  PanResponder,
+  RefreshControl,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { format } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
@@ -19,20 +23,39 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs'
 import useStore from '../store/useStore'
 import { getTheme } from '../theme/colors'
 import { typography } from '../theme/typography'
-import { Task, TimeSlot } from '../types'
+import { Task, TimeSlot, CourseSlot } from '../types'
 import TaskCard from '../components/TaskCard'
 import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
+import CelebrationOverlay from '../components/CelebrationOverlay'
 import { syncWithCloud } from '../lib/cloudSync'
 import { isSupabaseConfigured } from '../lib/supabase'
-import { generateDailySummary, generateSchedule, isAIConfigured, type DailySummary } from '../services/ai'
+import { generateDailySummary, generateSchedule, isAIConfigured, parseCourseGoal, generateMorningBriefing, generateWeeklyReview, parseScheduleCommand, type DailySummary, type MorningBriefing, type WeeklyReview } from '../services/ai'
+// Course filtering now done inline with selectedDate
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 
-const START_HOUR = 6
-const END_HOUR = 23
-const HOUR_HEIGHT = 56
-const TIMELINE_LEFT = 52
+const START_HOUR = 8
+const DEFAULT_END_HOUR = 22
+const TIMELINE_LEFT = 44
+const HEADER_HEIGHT = 100
+const { height: SCREEN_HEIGHT } = Dimensions.get('window')
+
+const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+const MONTH_LABELS = ['月', '火', '水', '木', '金', '土', '日']
+
+const getWeekDates = (date: Date): Date[] => {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  const day = d.getDay() || 7
+  const monday = new Date(d)
+  monday.setDate(d.getDate() - (day - 1))
+  return Array.from({ length: 7 }, (_, i) => {
+    const nd = new Date(monday)
+    nd.setDate(monday.getDate() + i)
+    return nd
+  })
+}
 
 const formatTime = (minutes: number): string => {
   const hours = Math.floor(minutes / 60)
@@ -87,7 +110,7 @@ const TimePickerContent = ({
   const [selectedMinute, setSelectedMinute] = useState(initialMinute ?? 0)
   const [duration, setDuration] = useState(60)
 
-  const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i)
+  const hours = Array.from({ length: 23 - START_HOUR + 1 }, (_, i) => START_HOUR + i)
   const minutes = [0, 15, 30, 45]
   const durations = [15, 30, 45, 60, 90, 120, 180]
   const endTime = selectedHour * 60 + selectedMinute + duration
@@ -213,7 +236,7 @@ const TaskPickerContent = ({
   const [selectedMinute, setSelectedMinute] = useState(initialMinute)
   const [duration, setDuration] = useState(60)
 
-  const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i)
+  const hours = Array.from({ length: 23 - START_HOUR + 1 }, (_, i) => START_HOUR + i)
   const minutes = [0, 15, 30, 45]
   const durations = [15, 30, 45, 60, 90, 120, 180]
   const endTime = selectedHour * 60 + selectedMinute + duration
@@ -491,17 +514,42 @@ const TodayScreen = () => {
   const {
     tasks,
     timeSlots,
+    habits,
     themeColor,
+    darkMode,
     updateTask,
     deleteTask,
     addTimeSlot,
     removeTimeSlot,
     toggleSubtask,
+    courses,
+    semesterStart,
+    courseGoals,
+    addCourseGoal,
+    removeCourseGoal,
   } = useStore()
   const tabBarHeight = useBottomTabBarHeight()
   const bottomSafeSpace = tabBarHeight + 12
-  const theme = getTheme(themeColor)
-  const today = format(new Date(), 'yyyy-MM-dd')
+  const theme = getTheme(themeColor, darkMode)
+
+  // Date selection
+  const [selectedDate, setSelectedDate] = useState(new Date())
+  const today = format(selectedDate, 'yyyy-MM-dd')
+  const actualToday = format(new Date(), 'yyyy-MM-dd')
+  const isViewingToday = today === actualToday
+  const weekDates = useMemo(() => getWeekDates(selectedDate), [selectedDate])
+
+  const weekNumber = useMemo(() => {
+    if (!semesterStart) return null
+    const sd = new Date(selectedDate)
+    sd.setHours(0, 0, 0, 0)
+    const start = new Date(semesterStart)
+    start.setHours(0, 0, 0, 0)
+    const diffDays = Math.floor((sd.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+    const week = Math.floor(diffDays / 7) + 1
+    return week >= 1 && week <= 25 ? week : null
+  }, [semesterStart, selectedDate])
+
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [showTimePicker, setShowTimePicker] = useState(false)
   const [showTaskPicker, setShowTaskPicker] = useState(false)
@@ -512,6 +560,25 @@ const TodayScreen = () => {
   const [showCompleted, setShowCompleted] = useState(false)
   const [prefillHour, setPrefillHour] = useState(9)
   const [prefillMinute, setPrefillMinute] = useState(0)
+  const [unschedExpanded, setUnschedExpanded] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showCelebration, setShowCelebration] = useState(false)
+  const prevPendingRef = useRef<number | null>(null)
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    try {
+      const { user, tasks, timeSlots, projects, habits, setSyncData } = useStore.getState()
+      if (user && isSupabaseConfigured()) {
+        const cloudData = await syncWithCloud(user.id, { tasks, timeSlots, projects, habits })
+        const isEmpty = cloudData.tasks.length === 0 && cloudData.timeSlots.length === 0 &&
+          cloudData.projects.length === 0 && cloudData.habits.length === 0
+        if (!isEmpty) setSyncData(cloudData)
+      }
+    } catch { /* ignore */ }
+    setRefreshing(false)
+  }, [])
 
   const lastFocusSyncRef = useRef(0)
   useFocusEffect(
@@ -549,6 +616,28 @@ const TodayScreen = () => {
     return () => pulse.stop()
   }, [])
 
+  const swipePanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_evt, gs) =>
+        Math.abs(gs.dx) > 20 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+      onPanResponderRelease: (_evt, gs) => {
+        if (gs.dx > 50) {
+          setSelectedDate(prev => {
+            const d = new Date(prev)
+            d.setDate(d.getDate() - 1)
+            return d
+          })
+        } else if (gs.dx < -50) {
+          setSelectedDate(prev => {
+            const d = new Date(prev)
+            d.setDate(d.getDate() + 1)
+            return d
+          })
+        }
+      },
+    })
+  ).current
+
   const todayTasks = useMemo(
     () => tasks.filter((t) => t.dueDate === today && t.status !== 'cancelled'),
     [tasks, today]
@@ -558,15 +647,49 @@ const TodayScreen = () => {
     [timeSlots, today]
   )
 
+  const todayCourses = useMemo(() => {
+    if (!semesterStart || courses.length === 0) return []
+    const sd = new Date(selectedDate)
+    sd.setHours(0, 0, 0, 0)
+    const dayOfWeek = sd.getDay() || 7
+    const start = new Date(semesterStart)
+    start.setHours(0, 0, 0, 0)
+    const diffDays = Math.floor((sd.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+    const currentWeek = Math.floor(diffDays / 7) + 1
+    if (currentWeek < 1 || currentWeek > 25) return []
+    return courses.filter(c => c.dayOfWeek === dayOfWeek && c.weeks.includes(currentWeek))
+  }, [courses, semesterStart, selectedDate])
+
+  const effectiveEndHour = useMemo(() => {
+    const hasLate = todaySlots.some(s => s.startTime + s.duration > DEFAULT_END_HOUR * 60)
+      || todayCourses.some(c => c.startTime + c.duration > DEFAULT_END_HOUR * 60)
+    return hasLate ? 23 : DEFAULT_END_HOUR
+  }, [todaySlots, todayCourses])
+
+  const TAB_BAR_HEIGHT = 60
+  const MIN_HOUR_HEIGHT = 38
+  const hourHeight = useMemo(() => {
+    const available = SCREEN_HEIGHT - HEADER_HEIGHT - TAB_BAR_HEIGHT
+    const numHours = effectiveEndHour - START_HOUR
+    const calculated = Math.floor(available / numHours)
+    return Math.max(calculated, MIN_HOUR_HEIGHT)
+  }, [effectiveEndHour])
+
+  const timelineOverflows = useMemo(() => {
+    const available = SCREEN_HEIGHT - HEADER_HEIGHT - TAB_BAR_HEIGHT
+    const totalHeight = (effectiveEndHour - START_HOUR) * hourHeight
+    return totalHeight > available
+  }, [effectiveEndHour, hourHeight])
+
   const clampSlotToTimeline = useCallback((startTime: number, duration: number) => {
-    const maxDuration = END_HOUR * 60 - START_HOUR * 60
+    const maxDuration = effectiveEndHour * 60 - START_HOUR * 60
     const safeDuration = Math.max(15, Math.min(duration, maxDuration))
     const safeStart = Math.max(
       START_HOUR * 60,
-      Math.min(startTime, END_HOUR * 60 - safeDuration)
+      Math.min(startTime, effectiveEndHour * 60 - safeDuration)
     )
     return { startTime: safeStart, duration: safeDuration }
-  }, [])
+  }, [effectiveEndHour])
 
   const scheduleSlot = useCallback((
     taskId: string,
@@ -595,6 +718,14 @@ const TodayScreen = () => {
   )
   const pendingCount = todayTasks.filter((t) => t.status !== 'completed').length
   const completedCount = completedTasks.length
+
+  useEffect(() => {
+    if (prevPendingRef.current !== null && prevPendingRef.current > 0 && pendingCount === 0 && todayTasks.length > 0) {
+      setShowCelebration(true)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    }
+    prevPendingRef.current = pendingCount
+  }, [pendingCount, todayTasks.length])
 
   // AI Daily Summary
   const [aiAvailable, setAiAvailable] = useState(false)
@@ -638,11 +769,21 @@ const TodayScreen = () => {
         priority: t.priority,
         estimatedMinutes: t.estimatedMinutes || 60,
       }))
-      const occupiedSlots: TimeSlot[] = [...todaySlots]
-      const existing = todaySlots.map(s => ({
-        startTime: s.startTime,
-        duration: s.duration,
+      const courseOccupied = todayCourses.map(c => ({
+        startTime: c.startTime,
+        duration: c.duration,
       }))
+      const occupiedSlots: TimeSlot[] = [
+        ...todaySlots,
+        ...todayCourses.map(c => ({
+          id: c.id, taskId: '', date: today,
+          startTime: c.startTime, duration: c.duration,
+        })),
+      ]
+      const existing = [
+        ...todaySlots.map(s => ({ startTime: s.startTime, duration: s.duration })),
+        ...courseOccupied,
+      ]
       const now = new Date()
       const currentMinute = now.getHours() * 60 + now.getMinutes()
       const result = await generateSchedule(tasksToSchedule, existing, today, currentMinute)
@@ -678,8 +819,143 @@ const TodayScreen = () => {
     setAiScheduling(false)
   }
 
-  const toggleTask = (task: Task) =>
-    updateTask(task.id, { status: task.status === 'completed' ? 'pending' : 'completed' })
+  // Morning Briefing
+  const [briefing, setBriefing] = useState<MorningBriefing | null>(null)
+  const [briefingLoading, setBriefingLoading] = useState(false)
+  const [briefingDismissed, setBriefingDismissed] = useState(false)
+
+  useEffect(() => {
+    if (!aiAvailable || briefingDismissed || briefing || briefingLoading) return
+    if (!isViewingToday || todayTasks.length === 0) return
+    const hour = new Date().getHours()
+    if (hour < 5 || hour > 11) return
+    setBriefingLoading(true)
+    generateMorningBriefing(
+      todayTasks.map(t => ({ title: t.title, priority: t.priority, status: t.status })),
+      todayCourses.map(c => ({ name: c.name, startTime: c.startTime, duration: c.duration })),
+      todaySlots.map(s => ({ startTime: s.startTime, duration: s.duration, taskId: s.taskId })),
+      habits.map(h => ({ name: h.name, icon: h.icon, records: h.records })),
+      today
+    ).then(setBriefing).catch(() => {}).finally(() => setBriefingLoading(false))
+  }, [aiAvailable, isViewingToday, todayTasks.length])
+
+  // Weekly Review
+  const [weeklyReview, setWeeklyReview] = useState<WeeklyReview | null>(null)
+  const [weeklyReviewLoading, setWeeklyReviewLoading] = useState(false)
+  const [showWeeklyReview, setShowWeeklyReview] = useState(false)
+
+  const handleWeeklyReview = async () => {
+    if (weeklyReviewLoading) return
+    setWeeklyReviewLoading(true)
+    try {
+      const weekStart = new Date()
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1)
+      const weekTaskData: { date: string; title: string; status: string }[] = []
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(weekStart)
+        d.setDate(d.getDate() + i)
+        const ds = format(d, 'yyyy-MM-dd')
+        tasks.filter(t => t.dueDate === ds).forEach(t => weekTaskData.push({ date: ds, title: t.title, status: t.status }))
+      }
+      const weekHabitData = habits.map(h => {
+        let checks = 0
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(weekStart)
+          d.setDate(d.getDate() + i)
+          if (h.records[format(d, 'yyyy-MM-dd')]) checks++
+        }
+        return { name: h.name, icon: h.icon, weekChecks: checks, total: 7 }
+      })
+      const result = await generateWeeklyReview(weekTaskData, weekHabitData, [])
+      setWeeklyReview(result)
+      setShowWeeklyReview(true)
+    } catch (err: any) {
+      Alert.alert('周报生成失败', err?.message || '请重试')
+    }
+    setWeeklyReviewLoading(false)
+  }
+
+  // Course goal AI input (also used for natural language rescheduling)
+  const [courseGoalInput, setCourseGoalInput] = useState('')
+  const [courseGoalLoading, setCourseGoalLoading] = useState(false)
+
+  const handleSmartInput = async () => {
+    const text = courseGoalInput.trim()
+    if (!text || courseGoalLoading) return
+    setCourseGoalLoading(true)
+    try {
+      const rescheduleKeywords = /改到|推迟|提前|取消安排|挪到|移到|延后/
+      if (rescheduleKeywords.test(text) && todaySlots.length > 0) {
+        const tasksForAI = todayTasks.map(t => ({ id: t.id, title: t.title }))
+        const slotsForAI = todaySlots.map(s => ({ id: s.id, taskId: s.taskId, startTime: s.startTime, duration: s.duration }))
+        const cmd = await parseScheduleCommand(text, tasksForAI, slotsForAI, today)
+        if (cmd.action === 'cancel' && cmd.taskId) {
+          const slotToRemove = todaySlots.find(s => s.taskId === cmd.taskId)
+          if (slotToRemove) removeTimeSlot(slotToRemove.id)
+          Alert.alert('已取消', `已取消「${cmd.taskTitle || '任务'}」的时间安排`)
+        } else if (cmd.action === 'reschedule' && cmd.taskId && cmd.newStartTime) {
+          const slotToUpdate = todaySlots.find(s => s.taskId === cmd.taskId)
+          if (slotToUpdate) {
+            removeTimeSlot(slotToUpdate.id)
+            addTimeSlot({ taskId: cmd.taskId, date: cmd.newDate || today, startTime: cmd.newStartTime, duration: slotToUpdate.duration })
+          }
+          const h = Math.floor(cmd.newStartTime / 60)
+          const m = cmd.newStartTime % 60
+          Alert.alert('已改排', `「${cmd.taskTitle || '任务'}」改到 ${h}:${String(m).padStart(2, '0')}`)
+        } else if (cmd.action === 'shift' && cmd.shiftMinutes) {
+          const slotsToShift = cmd.scope === 'afternoon'
+            ? todaySlots.filter(s => s.startTime >= 12 * 60)
+            : todaySlots
+          slotsToShift.forEach(s => {
+            removeTimeSlot(s.id)
+            addTimeSlot({ taskId: s.taskId, date: today, startTime: s.startTime + cmd.shiftMinutes!, duration: s.duration })
+          })
+          Alert.alert('已调整', `已将${cmd.scope === 'afternoon' ? '下午' : '所有'}任务${cmd.shiftMinutes > 0 ? '推迟' : '提前'}${Math.abs(cmd.shiftMinutes)}分钟`)
+        }
+        setCourseGoalInput('')
+        setCourseGoalLoading(false)
+        return
+      }
+
+      if (todayCourses.length > 0 && todayTasks.length > 0) {
+        const coursesForAI = todayCourses.map(c => ({
+          id: c.id, name: c.name, startTime: c.startTime, duration: c.duration,
+        }))
+        const tasksForAI = todayTasks.map(t => ({ id: t.id, title: t.title }))
+        const result = await parseCourseGoal(text, coursesForAI, tasksForAI)
+        const matchedCourse = todayCourses.find(c => c.id === result.courseId)
+        addCourseGoal(result.courseId, today, result.taskId, result.taskTitle)
+        setCourseGoalInput('')
+        Alert.alert('已添加', `「${result.taskTitle}」→ ${matchedCourse?.name || '课程'}`)
+      } else {
+        Alert.alert('提示', '今天没有课程或任务可以操作')
+      }
+    } catch (err: any) {
+      Alert.alert('操作失败', err?.message || '请重试')
+    }
+    setCourseGoalLoading(false)
+  }
+
+  const handleCourseGoalLongPress = (course: CourseSlot) => {
+    const key = `${course.id}_${today}`
+    const goals = courseGoals[key]
+    if (!goals || goals.length === 0) return
+
+    const buttons = goals.map((g, i) => ({
+      text: `删除: ${g.taskTitle}`,
+      style: 'destructive' as const,
+      onPress: () => removeCourseGoal(course.id, today, i),
+    }))
+    buttons.push({ text: '取消', style: 'cancel' as const, onPress: () => {} })
+    Alert.alert(`${course.name} - 课程任务`, '选择要删除的任务', buttons)
+  }
+
+  const toggleTask = (task: Task) => {
+    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+    if (newStatus === 'completed') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    updateTask(task.id, { status: newStatus })
+  }
 
   const openTimePickerForTask = (task: Task, hour?: number, minute?: number) => {
     if (task.status === 'completed') return
@@ -706,9 +982,9 @@ const TodayScreen = () => {
   const handleTimelineTap = (event: { nativeEvent: { locationY: number } }) => {
     if (unscheduledTasks.length === 0) return
     const y = event.nativeEvent.locationY
-    const rawMinutes = (y / HOUR_HEIGHT) * 60 + START_HOUR * 60
+    const rawMinutes = (y / hourHeight) * 60 + START_HOUR * 60
     const snapped = Math.round(rawMinutes / 15) * 15
-    const clamped = Math.max(START_HOUR * 60, Math.min(END_HOUR * 60, snapped))
+    const clamped = Math.max(START_HOUR * 60, Math.min(effectiveEndHour * 60, snapped))
     setPrefillHour(Math.floor(clamped / 60))
     setPrefillMinute(clamped % 60)
 
@@ -736,34 +1012,66 @@ const TodayScreen = () => {
     ])
   }
 
+  const [draggingSlot, setDraggingSlot] = useState<string | null>(null)
+  const dragOffsetY = useRef(new Animated.Value(0)).current
+  const dragStartY = useRef(0)
+  const dragCurrentOffset = useRef(0)
+
+  const handleSlotDragStart = (slot: TimeSlot, gestureY: number) => {
+    setDraggingSlot(slot.id)
+    dragStartY.current = gestureY
+    dragCurrentOffset.current = 0
+    dragOffsetY.setValue(0)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+  }
+
+  const handleSlotDragMove = (gestureY: number) => {
+    const offset = gestureY - dragStartY.current
+    dragCurrentOffset.current = offset
+    dragOffsetY.setValue(offset)
+  }
+
+  const handleSlotDragEnd = (slot: TimeSlot) => {
+    const offset = dragCurrentOffset.current
+    const minutesDelta = Math.round((offset / hourHeight) * 60 / 15) * 15
+    if (Math.abs(minutesDelta) >= 15) {
+      const newStart = Math.max(START_HOUR * 60, Math.min(effectiveEndHour * 60 - slot.duration, slot.startTime + minutesDelta))
+      removeTimeSlot(slot.id)
+      addTimeSlot({ taskId: slot.taskId, date: slot.date, startTime: newStart, duration: slot.duration })
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    }
+    setDraggingSlot(null)
+    dragOffsetY.setValue(0)
+  }
+
   const renderTimeline = () => {
-    const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i)
+    const hours = Array.from({ length: effectiveEndHour - START_HOUR + 1 }, (_, i) => START_HOUR + i)
     const now = new Date()
     const currentMinutes = now.getHours() * 60 + now.getMinutes()
     const hasUnscheduled = unscheduledTasks.length > 0
 
-    return (
-      <View style={styles.tlContainer}>
-        <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
+    const timelineHeight = (effectiveEndHour - START_HOUR) * hourHeight + 12
+
+    const timelineContent = (
           <TouchableOpacity
             activeOpacity={hasUnscheduled ? 0.95 : 1}
             onPress={hasUnscheduled ? handleTimelineTap : undefined}
-            style={{ height: (END_HOUR - START_HOUR + 1) * HOUR_HEIGHT, position: 'relative' }}
+            style={{ height: timelineHeight, position: 'relative' }}
           >
             {hours.map((hour) => (
-              <View key={hour} style={[styles.hourRow, { top: (hour - START_HOUR) * HOUR_HEIGHT }]}>
+              <View key={hour} style={[styles.hourRow, { top: (hour - START_HOUR) * hourHeight }]}>
                 <Text style={[styles.hourLabel, { color: theme.textSecondary }]}>
-                  {hour.toString().padStart(2, '0')}:00
+                  {hour.toString().padStart(2, '0')}
                 </Text>
                 <View style={[styles.hourLine, { backgroundColor: theme.border }]} />
               </View>
             ))}
 
-            {currentMinutes >= START_HOUR * 60 && currentMinutes <= END_HOUR * 60 && (
+            {isViewingToday && currentMinutes >= START_HOUR * 60 && currentMinutes <= effectiveEndHour * 60 && (
               <View
                 style={[
                   styles.nowLine,
-                  { top: ((currentMinutes - START_HOUR * 60) / 60) * HOUR_HEIGHT },
+                  { top: ((currentMinutes - START_HOUR * 60) / 60) * hourHeight },
                 ]}
               >
                 <Animated.View
@@ -773,23 +1081,23 @@ const TodayScreen = () => {
                   ]}
                 />
                 <View style={[styles.nowDot, { backgroundColor: theme.primary }]} />
-                <View style={[styles.nowBar, { backgroundColor: theme.primary }]} />
               </View>
             )}
 
             {todaySlots.map((slot) => {
               const task = tasks.find((t) => t.id === slot.taskId)
               if (!task) return null
-              const top = ((slot.startTime - START_HOUR * 60) / 60) * HOUR_HEIGHT
-              const height = (slot.duration / 60) * HOUR_HEIGHT
+              const top = ((slot.startTime - START_HOUR * 60) / 60) * hourHeight
+              const height = (slot.duration / 60) * hourHeight
               const isDone = task.status === 'completed'
               const pColor = priorityColors[task.priority]
               const totalSubs = task.subtasks?.length || 0
               const doneSubs = task.subtasks?.filter(s => s.completed).length || 0
               const isCompact = height < 50
+              const isDragging = draggingSlot === slot.id
 
               return (
-                <TouchableOpacity
+                <Animated.View
                   key={slot.id}
                   style={[
                     styles.timeBlock,
@@ -797,15 +1105,27 @@ const TodayScreen = () => {
                       top,
                       height: Math.max(height, 24),
                       backgroundColor: theme.card,
-                      borderWidth: 1,
-                      borderColor: theme.border,
+                      borderWidth: isDragging ? 2 : 1,
+                      borderColor: isDragging ? theme.primary : theme.border,
                       borderLeftWidth: 4,
                       borderLeftColor: pColor,
                       opacity: isDone ? 0.6 : 1,
+                      transform: isDragging ? [{ translateY: dragOffsetY }] : [],
+                      zIndex: isDragging ? 100 : 5,
+                      elevation: isDragging ? 8 : 2,
                     },
                   ]}
+                >
+                <TouchableOpacity
+                  style={{ flex: 1 }}
                   onPress={() => openTaskDetail(task, slot)}
+                  onLongPress={(e) => handleSlotDragStart(slot, e.nativeEvent.pageY)}
+                  onPressOut={() => { if (draggingSlot === slot.id) handleSlotDragEnd(slot) }}
+                  onMoveShouldSetResponder={() => draggingSlot === slot.id}
+                  onResponderMove={(e) => { if (draggingSlot === slot.id) handleSlotDragMove(e.nativeEvent.pageY) }}
+                  onResponderRelease={() => { if (draggingSlot === slot.id) handleSlotDragEnd(slot) }}
                   activeOpacity={0.7}
+                  delayLongPress={400}
                 >
                   {isCompact ? (
                     <View style={styles.tbCompact}>
@@ -832,15 +1152,102 @@ const TodayScreen = () => {
                           {isDone && <Ionicons name="checkmark-circle" size={14} color={theme.success} />}
                         </View>
                       </View>
-                      <Text style={[styles.tbTitle, { color: isDone ? theme.textSecondary : theme.text }]} numberOfLines={1}>
-                        {task.title}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Text style={[styles.tbTitle, { color: isDone ? theme.textSecondary : theme.text, flex: 1 }]} numberOfLines={1}>
+                          {task.title}
+                        </Text>
+                        {(task.postponeCount || 0) >= 3 && !isDone && (
+                          <Ionicons name="alert-circle" size={12} color={theme.warning} />
+                        )}
+                      </View>
+                    </>
+                  )}
+                </TouchableOpacity>
+                </Animated.View>
+              )
+            })}
+
+            {todayCourses.map((course) => {
+              const top = ((course.startTime - START_HOUR * 60) / 60) * hourHeight
+              const height = (course.duration / 60) * hourHeight
+              const isCompact = height < 50
+              const goalKey = `${course.id}_${today}`
+              const goals = courseGoals[goalKey] || []
+              const hasGoals = goals.length > 0
+
+              return (
+                <TouchableOpacity
+                  key={course.id}
+                  style={[
+                    styles.timeBlock,
+                    {
+                      top,
+                      height: Math.max(height, 24),
+                      backgroundColor: `${course.color}18`,
+                      borderWidth: 1,
+                      borderColor: `${course.color}40`,
+                      borderLeftWidth: 4,
+                      borderLeftColor: course.color,
+                    },
+                  ]}
+                  activeOpacity={hasGoals ? 0.7 : 1}
+                  onLongPress={() => handleCourseGoalLongPress(course)}
+                >
+                  {isCompact ? (
+                    <View style={styles.tbCompact}>
+                      <Ionicons name="school-outline" size={11} color={course.color} style={{ marginRight: 4 }} />
+                      <Text style={[styles.tbTitleCompact, { color: course.color }]} numberOfLines={1}>
+                        {course.name}
                       </Text>
+                      {hasGoals && (
+                        <View style={[styles.courseGoalDot, { backgroundColor: course.color }]} />
+                      )}
+                    </View>
+                  ) : (
+                    <>
+                      <View style={styles.tbHeader}>
+                        <Text style={{ fontSize: 10, color: course.color, fontWeight: '500' }}>
+                          {formatTime(course.startTime)} - {formatTime(course.startTime + course.duration)}
+                        </Text>
+                        <Ionicons name="school" size={12} color={course.color} />
+                      </View>
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: course.color, marginTop: 1 }} numberOfLines={1}>
+                        {course.name}
+                      </Text>
+                      {course.location && !hasGoals ? (
+                        <Text style={{ fontSize: 10, color: `${course.color}99`, marginTop: 1 }} numberOfLines={1}>
+                          📍 {course.location}
+                        </Text>
+                      ) : null}
+                      {hasGoals && (
+                        <View style={styles.courseGoalList}>
+                          {goals.map((g, gi) => (
+                            <View key={gi} style={styles.courseGoalItem}>
+                              <Ionicons name="checkbox-outline" size={9} color={course.color} />
+                              <Text style={{ fontSize: 10, color: course.color, flex: 1 }} numberOfLines={1}>
+                                {g.taskTitle}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
                     </>
                   )}
                 </TouchableOpacity>
               )
             })}
           </TouchableOpacity>
+    )
+
+    return (
+      <View style={styles.tlContainer}>
+        <ScrollView
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + 8, minHeight: timelineOverflows ? undefined : '100%' }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.primary]} tintColor={theme.primary} />}
+        >
+          {timelineContent}
         </ScrollView>
       </View>
     )
@@ -848,158 +1255,267 @@ const TodayScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <StatusBar barStyle={darkMode ? 'light-content' : 'dark-content'} backgroundColor="transparent" translucent />
 
       <View style={[styles.headerGradient, { backgroundColor: theme.background }]}>
+        {/* Compact single-line header */}
         <View style={styles.headerRow}>
-          <View>
-            <Text style={[typography.caption, { color: theme.textSecondary }]}>
-              {getGreeting()}
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text }}>
+              {format(selectedDate, 'M/d')}
             </Text>
-            <Text style={[typography.heading2, { color: theme.text, marginTop: 2 }]}>
-              {format(new Date(), 'M月d日 EEEE', { locale: zhCN })}
+            <Text style={{ fontSize: 13, color: theme.textSecondary }}>
+              {DAY_LABELS[(selectedDate.getDay() + 6) % 7]}
+            </Text>
+            {weekNumber ? (
+              <Text style={{ fontSize: 11, color: theme.textSecondary }}>
+                第{weekNumber}周
+              </Text>
+            ) : null}
+            <Text style={{ fontSize: 10, color: theme.textSecondary, marginLeft: 2 }}>
+              {pendingCount}待办·{completedCount}完成
             </Text>
           </View>
-          <View style={[styles.segmented, { backgroundColor: theme.surfaceSecondary }]}>
-            <TouchableOpacity
-              style={[styles.segBtn, viewMode === 'timeline' && { backgroundColor: theme.card }]}
-              onPress={() => setViewMode('timeline')}
-            >
-              <Ionicons
-                name="calendar-outline"
-                size={16}
-                color={viewMode === 'timeline' ? theme.primary : theme.textSecondary}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.segBtn, viewMode === 'list' && { backgroundColor: theme.card }]}
-              onPress={() => setViewMode('list')}
-            >
-              <Ionicons
-                name="list-outline"
-                size={16}
-                color={viewMode === 'list' ? theme.primary : theme.textSecondary}
-              />
-            </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {!isViewingToday && (
+              <TouchableOpacity
+                style={[styles.todayBtn, { backgroundColor: theme.primary + '18', borderColor: theme.primary + '30' }]}
+                onPress={() => setSelectedDate(new Date())}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '600', color: theme.primary }}>今天</Text>
+              </TouchableOpacity>
+            )}
+            <View style={[styles.segmented, { backgroundColor: theme.surfaceSecondary }]}>
+              <TouchableOpacity
+                style={[styles.segBtn, viewMode === 'timeline' && { backgroundColor: theme.card }]}
+                onPress={() => setViewMode('timeline')}
+              >
+                <Ionicons name="calendar-outline" size={14} color={viewMode === 'timeline' ? theme.primary : theme.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.segBtn, viewMode === 'list' && { backgroundColor: theme.card }]}
+                onPress={() => setViewMode('list')}
+              >
+                <Ionicons name="list-outline" size={14} color={viewMode === 'list' ? theme.primary : theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
 
-        <View style={styles.statsPills}>
-          <View style={[styles.statPill, { flex: 1, backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border }]}>
-            <Ionicons name="hourglass-outline" size={13} color={theme.warning} />
-            <Text style={[typography.caption, { color: theme.text, fontWeight: '600' }]} numberOfLines={1}>
-              {pendingCount} 待完成
-            </Text>
-          </View>
-          <View style={[styles.statPill, { flex: 1, backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border }]}>
-            <Ionicons name="checkmark-circle-outline" size={13} color={theme.success} />
-            <Text style={[typography.caption, { color: theme.text, fontWeight: '600' }]} numberOfLines={1}>
-              {completedCount} 已完成
-            </Text>
-          </View>
-          <View style={[styles.statPill, { flex: 1, backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border }]}>
-            <Ionicons name="time-outline" size={13} color={theme.primary} />
-            <Text style={[typography.caption, { color: theme.text, fontWeight: '600' }]} numberOfLines={1}>
-              {todaySlots.length} 已安排
-            </Text>
-          </View>
+        {/* Compact week strip */}
+        <View style={styles.weekStrip}>
+          {weekDates.map((date, i) => {
+            const dateStr = format(date, 'yyyy-MM-dd')
+            const isSelected = dateStr === today
+            const isRealToday = dateStr === actualToday
+            const dayTasks = tasks.filter(t => t.dueDate === dateStr && t.status !== 'cancelled')
+            const hasTasks = dayTasks.length > 0
+
+            return (
+              <TouchableOpacity
+                key={i}
+                style={[styles.weekDayItem]}
+                onPress={() => setSelectedDate(new Date(date))}
+                activeOpacity={0.7}
+              >
+                <Text style={[
+                  styles.weekDayLabel,
+                  { color: isSelected ? theme.primary : theme.textSecondary },
+                ]}>
+                  {DAY_LABELS[i]}
+                </Text>
+                <View style={[
+                  styles.weekDayDateWrap,
+                  isSelected && { backgroundColor: theme.primary },
+                  isRealToday && !isSelected && { borderWidth: 1.5, borderColor: theme.primary },
+                ]}>
+                  <Text style={[
+                    styles.weekDayDate,
+                    { color: isSelected ? '#fff' : isRealToday ? theme.primary : theme.text },
+                  ]}>
+                    {date.getDate()}
+                  </Text>
+                </View>
+                {hasTasks && (
+                  <View style={[styles.weekDayDot, { backgroundColor: isSelected ? theme.primary + '60' : theme.primary }]} />
+                )}
+              </TouchableOpacity>
+            )
+          })}
         </View>
-        {aiAvailable && (todayTasks.length > 0 || unscheduledTasks.length > 0) && (
-          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, paddingHorizontal: 20 }}>
-            {todayTasks.length > 0 && (
-              <TouchableOpacity
-                style={[styles.statPill, { flex: 1, backgroundColor: theme.primary + '18', borderWidth: 1, borderColor: theme.primary + '30' }]}
-                onPress={handleGenerateSummary}
-                disabled={aiSummaryLoading}
-                activeOpacity={0.7}
-              >
-                {aiSummaryLoading ? (
-                  <ActivityIndicator size={12} color={theme.primary} />
-                ) : (
-                  <Ionicons name="sparkles-outline" size={13} color={theme.primary} />
-                )}
-                <Text style={[typography.caption, { color: theme.primary, fontWeight: '600' }]} numberOfLines={1}>
-                  AI 总结
-                </Text>
-              </TouchableOpacity>
-            )}
-            {unscheduledTasks.length > 0 && (
-              <TouchableOpacity
-                style={[styles.statPill, { flex: 1, backgroundColor: theme.primary + '18', borderWidth: 1, borderColor: theme.primary + '30' }]}
-                onPress={handleAISchedule}
-                disabled={aiScheduling}
-                activeOpacity={0.7}
-              >
-                {aiScheduling ? (
-                  <ActivityIndicator size={12} color={theme.primary} />
-                ) : (
-                  <Ionicons name="calendar-outline" size={13} color={theme.primary} />
-                )}
-                <Text style={[typography.caption, { color: theme.primary, fontWeight: '600' }]} numberOfLines={1}>
-                  AI 规划
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
       </View>
 
-      {viewMode === 'timeline' ? (
-        <View style={{ flex: 1, paddingBottom: bottomSafeSpace }}>
-          <View style={[styles.tlSection, { paddingBottom: 8 }]}>
-            <View style={styles.tlSectionHeader}>
-              <Text style={[typography.label, { color: theme.textSecondary }]}>
-                时间轴
-              </Text>
-              {unscheduledTasks.length > 0 && (
-                <Text style={[typography.small, { color: theme.textSecondary }]}>
-                  点击空白处安排任务
-                </Text>
+      {/* Morning Briefing */}
+      {briefing && !briefingDismissed && isViewingToday && (
+        <View style={[styles.briefingCard, { backgroundColor: theme.primary + '10', borderColor: theme.primary + '20' }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: theme.primary, marginBottom: 4 }}>{briefing.greeting}</Text>
+              <Text style={{ fontSize: 12, color: theme.text, marginBottom: 4 }}>{briefing.overview}</Text>
+              {briefing.priorities.length > 0 && (
+                <View style={{ gap: 2 }}>
+                  {briefing.priorities.map((p, i) => (
+                    <Text key={i} style={{ fontSize: 11, color: theme.textSecondary }}>· {p}</Text>
+                  ))}
+                </View>
               )}
+              <Text style={{ fontSize: 11, color: theme.primary, marginTop: 4, fontStyle: 'italic' }}>{briefing.motivational}</Text>
             </View>
+            <TouchableOpacity onPress={() => setBriefingDismissed(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="close" size={16} color={theme.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Smart AI input */}
+      {aiAvailable && (todayCourses.length > 0 || todaySlots.length > 0) && (
+        <View style={[styles.courseGoalBar, { borderBottomColor: theme.border }]}>
+          <View style={[styles.courseGoalInputWrap, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border }]}>
+            <Ionicons name="sparkles-outline" size={14} color={theme.textSecondary} />
+            <TextInput
+              style={[styles.courseGoalInput, { color: theme.text }]}
+              placeholder="课程任务 / 改排日程..."
+              placeholderTextColor={theme.textSecondary + '80'}
+              value={courseGoalInput}
+              onChangeText={setCourseGoalInput}
+              onSubmitEditing={handleSmartInput}
+              returnKeyType="send"
+              editable={!courseGoalLoading}
+            />
+            <TouchableOpacity
+              onPress={handleSmartInput}
+              disabled={courseGoalLoading || !courseGoalInput.trim()}
+              activeOpacity={0.6}
+              style={[styles.courseGoalSendBtn, {
+                backgroundColor: courseGoalInput.trim() ? theme.primary : theme.primary + '30',
+              }]}
+            >
+              {courseGoalLoading ? (
+                <ActivityIndicator size={12} color="#fff" />
+              ) : (
+                <Ionicons name="arrow-up" size={14} color="#fff" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      <View style={{ flex: 1 }} {...swipePanResponder.panHandlers}>
+      {viewMode === 'timeline' ? (
+        <View style={{ flex: 1 }}>
+          <View style={[styles.tlSection, { paddingBottom: 0, flex: 1 }]}>
             {renderTimeline()}
           </View>
 
+          {/* Floating AI buttons */}
+          {aiAvailable && (unscheduledTasks.length > 0 || todayTasks.length > 0) && (
+            <View style={styles.floatingAiRow}>
+              {unscheduledTasks.length > 0 && (
+                <TouchableOpacity
+                  style={[styles.floatingAiBtn, { backgroundColor: theme.primary + '15', borderColor: theme.primary + '30' }]}
+                  onPress={handleAISchedule}
+                  disabled={aiScheduling}
+                  activeOpacity={0.7}
+                >
+                  {aiScheduling ? (
+                    <ActivityIndicator size={10} color={theme.primary} />
+                  ) : (
+                    <Ionicons name="sparkles" size={12} color={theme.primary} />
+                  )}
+                  <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '600' }}>AI规划</Text>
+                </TouchableOpacity>
+              )}
+              {todayTasks.length > 0 && (
+                <TouchableOpacity
+                  style={[styles.floatingAiBtn, { backgroundColor: theme.primary + '15', borderColor: theme.primary + '30' }]}
+                  onPress={handleGenerateSummary}
+                  disabled={aiSummaryLoading}
+                  activeOpacity={0.7}
+                >
+                  {aiSummaryLoading ? (
+                    <ActivityIndicator size={10} color={theme.primary} />
+                  ) : (
+                    <Ionicons name="sparkles-outline" size={12} color={theme.primary} />
+                  )}
+                  <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '600' }}>总结</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.floatingAiBtn, { backgroundColor: theme.primary + '15', borderColor: theme.primary + '30' }]}
+                onPress={handleWeeklyReview}
+                disabled={weeklyReviewLoading}
+                activeOpacity={0.7}
+              >
+                {weeklyReviewLoading ? (
+                  <ActivityIndicator size={10} color={theme.primary} />
+                ) : (
+                  <Ionicons name="analytics-outline" size={12} color={theme.primary} />
+                )}
+                <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '600' }}>周报</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {unscheduledTasks.length > 0 && (
-            <View style={styles.unscheduledSection}>
-              <Text
-                style={[typography.label, { color: theme.textSecondary, paddingHorizontal: 20, marginBottom: 10 }]}
+            <View style={[styles.unscheduledSection, { borderTopWidth: 1, borderTopColor: theme.border }]}>
+              <TouchableOpacity
+                style={styles.unschedHeader}
+                onPress={() => setUnschedExpanded(!unschedExpanded)}
+                activeOpacity={0.7}
               >
-                待安排 ({unscheduledTasks.length})
-              </Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 20, gap: 10 }}
-              >
-                {unscheduledTasks.map((task) => (
-                  <TouchableOpacity
-                    key={task.id}
-                    style={[
-                      styles.unschedCard,
-                      {
-                        backgroundColor: theme.card,
-                        borderWidth: 1,
-                        borderColor: theme.border,
-                        borderLeftWidth: 4,
-                        borderLeftColor: priorityColors[task.priority],
-                      },
-                    ]}
-                    onPress={() => openTimePickerForTask(task)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[typography.bodyMedium, { color: theme.text }]} numberOfLines={2}>
-                      {task.title}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={[typography.label, { color: theme.textSecondary }]}>
+                    待安排
+                  </Text>
+                  <View style={[styles.unschedBadge, { backgroundColor: theme.primary + '20' }]}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: theme.primary }}>
+                      {unscheduledTasks.length}
                     </Text>
-                    <View style={styles.unschedHintRow}>
-                      <Ionicons name="time-outline" size={11} color={theme.textSecondary} />
-                      <Text style={[typography.small, { color: theme.textSecondary }]}>
-                        点击安排
+                  </View>
+                </View>
+                <Ionicons
+                  name={unschedExpanded ? 'chevron-down' : 'chevron-up'}
+                  size={18}
+                  color={theme.textSecondary}
+                />
+              </TouchableOpacity>
+              {unschedExpanded && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ paddingHorizontal: 20, gap: 10, paddingBottom: 4 }}
+                >
+                  {unscheduledTasks.map((task) => (
+                    <TouchableOpacity
+                      key={task.id}
+                      style={[
+                        styles.unschedCard,
+                        {
+                          backgroundColor: theme.card,
+                          borderWidth: 1,
+                          borderColor: theme.border,
+                          borderLeftWidth: 4,
+                          borderLeftColor: priorityColors[task.priority],
+                        },
+                      ]}
+                      onPress={() => openTimePickerForTask(task)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[typography.bodyMedium, { color: theme.text }]} numberOfLines={2}>
+                        {task.title}
                       </Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+                      <View style={styles.unschedHintRow}>
+                        <Ionicons name="time-outline" size={11} color={theme.textSecondary} />
+                        <Text style={[typography.small, { color: theme.textSecondary }]}>
+                          点击安排
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
             </View>
           )}
         </View>
@@ -1008,6 +1524,7 @@ const TodayScreen = () => {
           style={{ flex: 1 }}
           contentContainerStyle={[styles.listContent, { paddingBottom: bottomSafeSpace + 24 }]}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.primary]} tintColor={theme.primary} />}
         >
           {unscheduledTasks.length > 0 && (
             <View style={styles.listSection}>
@@ -1068,6 +1585,7 @@ const TodayScreen = () => {
           )}
         </ScrollView>
       )}
+      </View>
 
       {/* Time picker for a specific task */}
       <BottomSheet
@@ -1181,6 +1699,53 @@ const TodayScreen = () => {
           </View>
         )}
       </BottomSheet>
+
+      {/* Weekly Review */}
+      <BottomSheet
+        visible={showWeeklyReview && !!weeklyReview}
+        onClose={() => setShowWeeklyReview(false)}
+        theme={theme}
+        title="AI 周报"
+      >
+        {weeklyReview && (
+          <View style={{ gap: 16 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={[typography.label, { color: theme.text }]}>本周完成</Text>
+              <Text style={[typography.heading3, { color: theme.primary }]}>{weeklyReview.completionRate}</Text>
+            </View>
+            <Text style={[typography.body, { color: theme.textSecondary, lineHeight: 20 }]}>{weeklyReview.summary}</Text>
+            <View style={{ flexDirection: 'row', gap: 16 }}>
+              <View style={{ flex: 1, backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 10 }}>
+                <Text style={{ fontSize: 10, color: theme.textSecondary }}>最高效日</Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: theme.text, marginTop: 2 }}>{weeklyReview.bestDay}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 10 }}>
+                <Text style={{ fontSize: 10, color: theme.textSecondary }}>黄金时段</Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: theme.text, marginTop: 2 }}>{weeklyReview.mostProductiveTime}</Text>
+              </View>
+            </View>
+            {weeklyReview.highlights.length > 0 && (
+              <View>
+                <Text style={[typography.label, { color: theme.text, marginBottom: 6 }]}>亮点</Text>
+                {weeklyReview.highlights.map((h, i) => (
+                  <Text key={i} style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 3 }}>+ {h}</Text>
+                ))}
+              </View>
+            )}
+            {weeklyReview.nextWeekSuggestions.length > 0 && (
+              <View>
+                <Text style={[typography.label, { color: theme.text, marginBottom: 6 }]}>下周建议</Text>
+                {weeklyReview.nextWeekSuggestions.map((s, i) => (
+                  <Text key={i} style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 3 }}>· {s}</Text>
+                ))}
+              </View>
+            )}
+            <Text style={{ fontSize: 12, color: theme.textSecondary, lineHeight: 18 }}>{weeklyReview.habitSummary}</Text>
+          </View>
+        )}
+      </BottomSheet>
+
+      <CelebrationOverlay visible={showCelebration} onFinish={() => setShowCelebration(false)} />
     </View>
   )
 }
@@ -1188,55 +1753,85 @@ const TodayScreen = () => {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   headerGradient: {
-    paddingTop: 56,
-    paddingBottom: 8,
-    paddingHorizontal: 20,
+    paddingTop: 44,
+    paddingBottom: 2,
+    paddingHorizontal: 16,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+  },
+  todayBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
   },
   segmented: {
     flexDirection: 'row',
-    borderRadius: 14,
-    padding: 3,
-    gap: 2,
+    borderRadius: 12,
+    padding: 2,
+    gap: 1,
   },
   segBtn: {
-    width: 36,
-    height: 32,
-    borderRadius: 12,
+    width: 30,
+    height: 26,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statsPills: {
-    marginTop: 16,
+  weekStrip: {
     flexDirection: 'row',
-    gap: 6,
+    marginTop: 6,
+    marginBottom: 2,
   },
-  statPill: {
-    flexDirection: 'row',
+  weekDayItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  weekDayLabel: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  weekDayDateWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  weekDayDate: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  weekDayDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+  },
+  floatingAiRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  floatingAiBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
   },
-  tlSection: { flex: 1, paddingTop: 8 },
-  tlSectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 12,
-  },
+  tlSection: { flex: 1, paddingTop: 2 },
   tlContainer: {
     flex: 1,
-    borderRadius: 16,
     overflow: 'hidden',
-    marginHorizontal: 20,
+    marginHorizontal: 12,
   },
   hourRow: {
     position: 'absolute',
@@ -1247,9 +1842,9 @@ const styles = StyleSheet.create({
   },
   hourLabel: {
     width: TIMELINE_LEFT,
-    fontSize: 11,
+    fontSize: 10,
     textAlign: 'right',
-    paddingRight: 8,
+    paddingRight: 6,
   },
   hourLine: {
     flex: 1,
@@ -1257,38 +1852,33 @@ const styles = StyleSheet.create({
   },
   nowLine: {
     position: 'absolute',
-    left: TIMELINE_LEFT,
-    right: 0,
-    flexDirection: 'row',
+    left: 0,
+    width: TIMELINE_LEFT,
     alignItems: 'center',
-    zIndex: 10,
+    justifyContent: 'center',
+    zIndex: 2,
   },
   nowDotOuter: {
     position: 'absolute',
     width: 16,
     height: 16,
     borderRadius: 8,
-    left: -4,
   },
   nowDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
-  nowBar: {
-    flex: 1,
-    height: 2,
-    marginLeft: -4,
-  },
   timeBlock: {
     position: 'absolute',
     left: TIMELINE_LEFT,
-    right: 8,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    right: 4,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     overflow: 'hidden',
     justifyContent: 'center',
+    zIndex: 5,
   },
   tbCompact: {
     flexDirection: 'row',
@@ -1307,9 +1897,74 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '500',
   },
+  briefingCard: {
+    marginHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  courseGoalBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  courseGoalInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingLeft: 10,
+    paddingRight: 4,
+    height: 32,
+    gap: 6,
+  },
+  courseGoalInput: {
+    flex: 1,
+    fontSize: 13,
+    paddingVertical: 0,
+  },
+  courseGoalSendBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  courseGoalDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 4,
+  },
+  courseGoalList: {
+    marginTop: 2,
+    gap: 1,
+  },
+  courseGoalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   unscheduledSection: {
-    paddingVertical: 12,
-    paddingBottom: 16,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  unschedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  unschedBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
   },
   unschedCard: {
     width: 150,

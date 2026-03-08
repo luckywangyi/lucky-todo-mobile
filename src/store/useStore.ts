@@ -5,7 +5,7 @@ import { format } from 'date-fns'
 // 生成 UUID 的函数
 const generateUUID = () => Crypto.randomUUID()
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { Task, TimeSlot, Project, ProjectPhase, Habit, ThemeColor, UserProfile } from '../types'
+import { Task, TimeSlot, Project, ProjectPhase, Habit, CourseSlot, ThemeColor, UserProfile } from '../types'
 import { deleteCloudHabit, deleteCloudHabitByName } from '../lib/cloudSync'
 
 interface AppState {
@@ -14,15 +14,20 @@ interface AppState {
   timeSlots: TimeSlot[]
   projects: Project[]
   habits: Habit[]
+  courses: CourseSlot[]
+  semesterStart: string | null
+  courseGoals: Record<string, { taskId: string; taskTitle: string }[]>
   
   // UI 状态
   themeColor: ThemeColor
+  darkMode: boolean
   
   // 用户
   user: UserProfile | null
   
   // Actions
   setThemeColor: (color: ThemeColor) => void
+  setDarkMode: (dark: boolean) => void
   setUser: (user: UserProfile | null) => void
   
   // Task actions
@@ -50,6 +55,13 @@ interface AppState {
   toggleHabitDate: (habitId: string, date: string) => void
   deleteHabit: (id: string) => void
   
+  // Course actions
+  setCourses: (courses: CourseSlot[]) => void
+  clearCourses: () => void
+  setSemesterStart: (date: string) => void
+  addCourseGoal: (courseId: string, date: string, taskId: string, taskTitle: string) => void
+  removeCourseGoal: (courseId: string, date: string, goalIndex: number) => void
+  
   // 数据持久化
   loadData: () => Promise<void>
   saveData: () => Promise<void>
@@ -62,12 +74,21 @@ const useStore = create<AppState>((set, get) => ({
   timeSlots: [],
   projects: [],
   habits: [],
+  courses: [],
+  semesterStart: null,
+  courseGoals: {},
   themeColor: 'ocean',
+  darkMode: false,
   user: null,
 
   setThemeColor: (themeColor) => {
     set({ themeColor })
     AsyncStorage.setItem('lucky-todo-theme', themeColor)
+  },
+
+  setDarkMode: (darkMode) => {
+    set({ darkMode })
+    AsyncStorage.setItem('lucky-todo-dark-mode', JSON.stringify(darkMode))
   },
 
   setUser: (user) => set({ user }),
@@ -296,14 +317,56 @@ const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  setCourses: (courses) => {
+    set({ courses })
+    AsyncStorage.setItem('lucky-todo-courses', JSON.stringify(courses))
+  },
+
+  clearCourses: () => {
+    set({ courses: [], semesterStart: null })
+    AsyncStorage.removeItem('lucky-todo-courses')
+    AsyncStorage.removeItem('lucky-todo-semester-start')
+  },
+
+  setSemesterStart: (date) => {
+    set({ semesterStart: date })
+    AsyncStorage.setItem('lucky-todo-semester-start', date)
+  },
+
+  addCourseGoal: (courseId, date, taskId, taskTitle) => {
+    const key = `${courseId}_${date}`
+    set((state) => {
+      const existing = state.courseGoals[key] || []
+      if (existing.some((g) => g.taskId === taskId)) return state
+      const updated = { ...state.courseGoals, [key]: [...existing, { taskId, taskTitle }] }
+      AsyncStorage.setItem('lucky-todo-course-goals', JSON.stringify(updated))
+      return { courseGoals: updated }
+    })
+  },
+
+  removeCourseGoal: (courseId, date, goalIndex) => {
+    const key = `${courseId}_${date}`
+    set((state) => {
+      const existing = state.courseGoals[key] || []
+      const updated = { ...state.courseGoals, [key]: existing.filter((_, i) => i !== goalIndex) }
+      if (updated[key].length === 0) delete updated[key]
+      AsyncStorage.setItem('lucky-todo-course-goals', JSON.stringify(updated))
+      return { courseGoals: updated }
+    })
+  },
+
   loadData: async () => {
     try {
-      const [tasksJson, timeSlotsJson, projectsJson, habitsJson, themeJson] = await Promise.all([
+      const [tasksJson, timeSlotsJson, projectsJson, habitsJson, themeJson, darkModeJson, coursesJson, semesterStartJson, courseGoalsJson] = await Promise.all([
         AsyncStorage.getItem('lucky-todo-tasks'),
         AsyncStorage.getItem('lucky-todo-timeSlots'),
         AsyncStorage.getItem('lucky-todo-projects'),
         AsyncStorage.getItem('lucky-todo-habits'),
         AsyncStorage.getItem('lucky-todo-theme'),
+        AsyncStorage.getItem('lucky-todo-dark-mode'),
+        AsyncStorage.getItem('lucky-todo-courses'),
+        AsyncStorage.getItem('lucky-todo-semester-start'),
+        AsyncStorage.getItem('lucky-todo-course-goals'),
       ])
 
       const updates: Partial<AppState> = {}
@@ -319,7 +382,12 @@ const useStore = create<AppState>((set, get) => ({
           if (task.status !== 'completed' && task.status !== 'cancelled' && task.dueDate < today) {
             hasOverdueTasks = true
             console.log(`[任务延续] 将过期任务「${task.title}」从 ${task.dueDate} 延续到 ${today}`)
-            return { ...task, dueDate: today }
+            return {
+              ...task,
+              dueDate: today,
+              originalDueDate: task.originalDueDate || task.dueDate,
+              postponeCount: (task.postponeCount || 0) + 1,
+            }
           }
           return task
         })
@@ -337,6 +405,18 @@ const useStore = create<AppState>((set, get) => ({
       }
       if (themeJson) {
         updates.themeColor = themeJson as ThemeColor
+      }
+      if (darkModeJson) {
+        try { updates.darkMode = JSON.parse(darkModeJson) } catch { /* ignore */ }
+      }
+      if (coursesJson) {
+        try { updates.courses = JSON.parse(coursesJson) } catch { /* ignore */ }
+      }
+      if (semesterStartJson) {
+        updates.semesterStart = semesterStartJson
+      }
+      if (courseGoalsJson) {
+        try { updates.courseGoals = JSON.parse(courseGoalsJson) } catch { /* ignore */ }
       }
 
       if (Object.keys(updates).length > 0) {

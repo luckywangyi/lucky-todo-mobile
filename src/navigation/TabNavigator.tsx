@@ -25,8 +25,8 @@ const tabConfig: {
 ]
 
 const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarProps) => {
-  const { themeColor } = useStore()
-  const theme = getTheme(themeColor)
+  const { themeColor, darkMode } = useStore()
+  const theme = getTheme(themeColor, darkMode)
 
   return (
     <View style={[styles.tabBarOuter, { backgroundColor: theme.background }]}>

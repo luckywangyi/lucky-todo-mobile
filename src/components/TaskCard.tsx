@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import React, { useState, useRef } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet, Animated, PanResponder } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import * as Haptics from 'expo-haptics'
 import { ThemeColors } from '../theme/colors'
 import { Task } from '../types'
 import Checkbox from './Checkbox'
@@ -22,6 +23,8 @@ interface TaskCardProps {
   hint?: string
 }
 
+const SWIPE_THRESHOLD = 80
+
 const TaskCard: React.FC<TaskCardProps> = ({
   task,
   theme,
@@ -36,131 +39,183 @@ const TaskCard: React.FC<TaskCardProps> = ({
   const completedSubtasks = task.subtasks.filter((st) => st.completed).length
   const totalSubtasks = task.subtasks.length
 
-  return (
-    <TouchableOpacity
-      activeOpacity={0.7}
-      style={[
-        styles.card,
-        {
-          backgroundColor: '#FFFFFF',
-          borderWidth: 1,
-          borderColor: theme.border,
-          opacity: isCompleted ? 0.65 : 1,
-        },
-      ]}
-      onPress={() => totalSubtasks > 0 && setExpanded(!expanded)}
-      onLongPress={() => onLongPress?.(task)}
-      delayLongPress={300}
-    >
-      {/* Priority accent */}
-      <View style={[styles.priorityBar, { backgroundColor: priorityColors[task.priority] }]} />
+  const translateX = useRef(new Animated.Value(0)).current
+  const callbacksRef = useRef({ onDelete, onToggle, task })
+  callbacksRef.current = { onDelete, onToggle, task }
 
-      <View style={styles.content}>
-        {/* Header row */}
-        <View style={styles.headerRow}>
-          <Checkbox
-            checked={isCompleted}
-            onPress={() => onToggle(task)}
-            theme={theme}
-          />
-          <View style={styles.info}>
-            <Text
-              style={[
-                typography.bodyMedium,
-                { color: theme.text },
-                isCompleted && styles.titleCompleted,
-              ]}
-              numberOfLines={2}
-            >
-              {task.title}
-            </Text>
-            {hint && !isCompleted && (
-              <Text style={[typography.small, { color: theme.textSecondary, marginTop: 2 }]}>
-                {hint}
-              </Text>
-            )}
-            {totalSubtasks > 0 && (
-              <View style={styles.progressRow}>
-                <View style={[styles.progressTrack, { backgroundColor: theme.border }]}>
-                  <View
-                    style={[
-                      styles.progressFill,
-                      {
-                        backgroundColor: theme.primary,
-                        width: `${(completedSubtasks / totalSubtasks) * 100}%`,
-                      },
-                    ]}
-                  />
-                </View>
-                <Text style={[typography.small, { color: theme.textSecondary }]}>
-                  {completedSubtasks}/{totalSubtasks}
-                </Text>
-              </View>
-            )}
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, gs) =>
+        Math.abs(gs.dx) > 15 && Math.abs(gs.dx) > Math.abs(gs.dy) * 2,
+      onPanResponderMove: (_e, gs) => {
+        translateX.setValue(gs.dx)
+      },
+      onPanResponderRelease: (_e, gs) => {
+        if (gs.dx < -SWIPE_THRESHOLD) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+          Animated.timing(translateX, { toValue: -200, duration: 200, useNativeDriver: true }).start(() => {
+            callbacksRef.current.onDelete(callbacksRef.current.task)
+            translateX.setValue(0)
+          })
+        } else if (gs.dx > SWIPE_THRESHOLD) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+          Animated.timing(translateX, { toValue: 200, duration: 200, useNativeDriver: true }).start(() => {
+            callbacksRef.current.onToggle(callbacksRef.current.task)
+            translateX.setValue(0)
+          })
+        } else {
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start()
+        }
+      },
+    })
+  ).current
+
+  return (
+    <View style={{ overflow: 'hidden', borderRadius: 16, marginBottom: 10 }}>
+      {/* Background actions */}
+      <View style={StyleSheet.absoluteFill}>
+        <View style={{ flex: 1, flexDirection: 'row' }}>
+          <View style={[styles.swipeAction, { backgroundColor: theme.success, justifyContent: 'flex-start', paddingLeft: 20 }]}>
+            <Ionicons name={isCompleted ? 'arrow-undo' : 'checkmark-circle'} size={22} color="#fff" />
+            <Text style={styles.swipeText}>{isCompleted ? '恢复' : '完成'}</Text>
           </View>
-          <View style={styles.actions}>
-            {totalSubtasks > 0 && (
-              <TouchableOpacity
-                style={styles.actionBtn}
-                onPress={() => setExpanded(!expanded)}
-              >
-                <Ionicons
-                  name={expanded ? 'chevron-up' : 'chevron-down'}
-                  size={18}
-                  color={theme.textSecondary}
-                />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={styles.actionBtn} onPress={() => onDelete(task)}>
-              <Ionicons name="trash-outline" size={16} color={theme.error} />
-            </TouchableOpacity>
+          <View style={[styles.swipeAction, { backgroundColor: theme.error, justifyContent: 'flex-end', paddingRight: 20 }]}>
+            <Text style={styles.swipeText}>删除</Text>
+            <Ionicons name="trash" size={22} color="#fff" />
           </View>
         </View>
+      </View>
 
-        {/* Subtasks */}
-        {expanded && totalSubtasks > 0 && (
-          <View style={[styles.subtasks, { borderTopColor: theme.border }]}>
-            {task.subtasks.map((sub) => (
-              <TouchableOpacity
-                key={sub.id}
-                style={styles.subtaskRow}
-                onPress={() => onToggleSubtask?.(task.id, sub.id)}
-              >
-                <Checkbox
-                  checked={sub.completed}
-                  onPress={() => onToggleSubtask?.(task.id, sub.id)}
-                  theme={theme}
-                  size="small"
-                />
+      <Animated.View style={{ transform: [{ translateX }] }} {...panResponder.panHandlers}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[
+            styles.card,
+            {
+              backgroundColor: theme.card,
+              borderWidth: 1,
+              borderColor: theme.border,
+              opacity: isCompleted ? 0.65 : 1,
+            },
+          ]}
+          onPress={() => totalSubtasks > 0 && setExpanded(!expanded)}
+          onLongPress={() => onLongPress?.(task)}
+          delayLongPress={300}
+        >
+          <View style={[styles.priorityBar, { backgroundColor: priorityColors[task.priority] }]} />
+          <View style={styles.content}>
+            <View style={styles.headerRow}>
+              <Checkbox
+                checked={isCompleted}
+                onPress={() => onToggle(task)}
+                theme={theme}
+              />
+              <View style={styles.info}>
                 <Text
                   style={[
-                    typography.caption,
-                    { color: theme.textSecondary, flex: 1, marginLeft: 8 },
-                    sub.completed && styles.subtaskCompleted,
+                    typography.bodyMedium,
+                    { color: theme.text },
+                    isCompleted && styles.titleCompleted,
                   ]}
                   numberOfLines={2}
                 >
-                  {sub.title}
+                  {task.title}
                 </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* Tags */}
-        {task.tags.length > 0 && (
-          <View style={styles.tagsRow}>
-            {task.tags.slice(0, 3).map((tag, idx) => (
-              <View key={idx} style={[styles.tag, { backgroundColor: `${theme.primary}10` }]}>
-                <Text style={[typography.small, { color: theme.primary, fontWeight: '500' }]}>
-                  {tag}
-                </Text>
+                {hint && !isCompleted && (
+                  <Text style={[typography.small, { color: theme.textSecondary, marginTop: 2 }]}>
+                    {hint}
+                  </Text>
+                )}
+                {(task.postponeCount || 0) >= 3 && !isCompleted && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 }}>
+                    <Ionicons name="alert-circle" size={12} color={theme.warning} />
+                    <Text style={{ fontSize: 10, color: theme.warning }}>
+                      已推迟 {task.postponeCount} 次
+                    </Text>
+                  </View>
+                )}
+                {totalSubtasks > 0 && (
+                  <View style={styles.progressRow}>
+                    <View style={[styles.progressTrack, { backgroundColor: theme.border }]}>
+                      <View
+                        style={[
+                          styles.progressFill,
+                          {
+                            backgroundColor: theme.primary,
+                            width: `${(completedSubtasks / totalSubtasks) * 100}%`,
+                          },
+                        ]}
+                      />
+                    </View>
+                    <Text style={[typography.small, { color: theme.textSecondary }]}>
+                      {completedSubtasks}/{totalSubtasks}
+                    </Text>
+                  </View>
+                )}
               </View>
-            ))}
+              <View style={styles.actions}>
+                {totalSubtasks > 0 && (
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={() => setExpanded(!expanded)}
+                  >
+                    <Ionicons
+                      name={expanded ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color={theme.textSecondary}
+                    />
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.actionBtn} onPress={() => onDelete(task)}>
+                  <Ionicons name="trash-outline" size={16} color={theme.error} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {expanded && totalSubtasks > 0 && (
+              <View style={[styles.subtasks, { borderTopColor: theme.border }]}>
+                {task.subtasks.map((sub) => (
+                  <TouchableOpacity
+                    key={sub.id}
+                    style={styles.subtaskRow}
+                    onPress={() => onToggleSubtask?.(task.id, sub.id)}
+                  >
+                    <Checkbox
+                      checked={sub.completed}
+                      onPress={() => onToggleSubtask?.(task.id, sub.id)}
+                      theme={theme}
+                      size="small"
+                    />
+                    <Text
+                      style={[
+                        typography.caption,
+                        { color: theme.textSecondary, flex: 1, marginLeft: 8 },
+                        sub.completed && styles.subtaskCompleted,
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {sub.title}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {task.tags.length > 0 && (
+              <View style={styles.tagsRow}>
+                {task.tags.slice(0, 3).map((tag, idx) => (
+                  <View key={idx} style={[styles.tag, { backgroundColor: `${theme.primary}10` }]}>
+                    <Text style={[typography.small, { color: theme.primary, fontWeight: '500' }]}>
+                      {tag}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
-        )}
-      </View>
-    </TouchableOpacity>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
   )
 }
 
@@ -169,7 +224,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     flexDirection: 'row',
-    marginBottom: 10,
   },
   priorityBar: {
     width: 3,
@@ -238,6 +292,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
+  },
+  swipeAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  swipeText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 13,
   },
 })
 

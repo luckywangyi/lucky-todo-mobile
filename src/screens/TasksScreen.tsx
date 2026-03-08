@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -8,7 +8,9 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { format, parseISO, isToday, isTomorrow, isYesterday, isPast } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
@@ -21,6 +23,8 @@ import FilterPills from '../components/FilterPills'
 import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
 import { parseNaturalLanguage, generateSubtasks, isAIConfigured, type ParsedTask } from '../services/ai'
+import { syncWithCloud } from '../lib/cloudSync'
+import { isSupabaseConfigured } from '../lib/supabase'
 
 interface DateGroup {
   date: string
@@ -37,12 +41,29 @@ const filterOptions = [
 ]
 
 const TasksScreen = () => {
-  const { tasks, themeColor, addTask, updateTask, deleteTask, toggleSubtask } = useStore()
-  const theme = getTheme(themeColor)
+  const { tasks, themeColor, darkMode, addTask, updateTask, deleteTask, toggleSubtask } = useStore()
+  const theme = getTheme(themeColor, darkMode)
   const [showAddModal, setShowAddModal] = useState(false)
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [newTaskPriority, setNewTaskPriority] = useState<Priority>('medium')
   const [filter, setFilter] = useState<'all' | 'pending' | 'completed'>('pending')
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const [refreshing, setRefreshing] = useState(false)
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    try {
+      const { user, tasks, timeSlots, projects, habits, setSyncData } = useStore.getState()
+      if (user && isSupabaseConfigured()) {
+        const cloudData = await syncWithCloud(user.id, { tasks, timeSlots, projects, habits })
+        const isEmpty = cloudData.tasks.length === 0 && cloudData.timeSlots.length === 0 &&
+          cloudData.projects.length === 0 && cloudData.habits.length === 0
+        if (!isEmpty) setSyncData(cloudData)
+      }
+    } catch { /* ignore */ }
+    setRefreshing(false)
+  }, [])
 
   // AI states
   const [aiAvailable, setAiAvailable] = useState(false)
@@ -112,6 +133,16 @@ const TasksScreen = () => {
       filteredTasks = filteredTasks.filter((t) => t.status === 'completed')
     }
 
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      filteredTasks = filteredTasks.filter(t =>
+        t.title.toLowerCase().includes(q) ||
+        t.description?.toLowerCase().includes(q) ||
+        t.tags.some(tag => tag.toLowerCase().includes(q)) ||
+        t.subtasks.some(s => s.title.toLowerCase().includes(q))
+      )
+    }
+
     const groups: { [key: string]: Task[] } = {}
     filteredTasks.forEach((task) => {
       const date = task.dueDate
@@ -142,7 +173,7 @@ const TasksScreen = () => {
       .sort((a, b) => a.date.localeCompare(b.date))
 
     return result
-  }, [tasks, filter])
+  }, [tasks, filter, searchQuery])
 
   const handleAddTask = () => {
     if (!newTaskTitle.trim()) return
@@ -164,7 +195,10 @@ const TasksScreen = () => {
   }
 
   const toggleTask = (task: Task) => {
-    updateTask(task.id, { status: task.status === 'completed' ? 'pending' : 'completed' })
+    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+    if (newStatus === 'completed') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    updateTask(task.id, { status: newStatus })
   }
 
   const handleDelete = (task: Task) => {
@@ -218,6 +252,34 @@ const TasksScreen = () => {
         </View>
       </View>
 
+      {/* Search bar */}
+      <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: theme.surfaceSecondary,
+          borderRadius: 10,
+          paddingHorizontal: 10,
+          height: 36,
+          gap: 6,
+        }}>
+          <Ionicons name="search" size={16} color={theme.textSecondary} />
+          <TextInput
+            style={{ flex: 1, fontSize: 14, color: theme.text, padding: 0 }}
+            placeholder="搜索任务..."
+            placeholderTextColor={theme.textSecondary + '80'}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            returnKeyType="search"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={16} color={theme.textSecondary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
       {/* Filter */}
       <View style={[styles.filterWrapper, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border }]}>
         <FilterPills
@@ -233,6 +295,7 @@ const TasksScreen = () => {
         style={{ flex: 1 }}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.primary]} tintColor={theme.primary} />}
       >
         {groupedTasks.map((group) => (
           <View key={group.date} style={styles.dateGroup}>

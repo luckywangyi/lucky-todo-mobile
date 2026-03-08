@@ -11,6 +11,7 @@ import {
   TextInput,
   ActivityIndicator,
 } from 'react-native'
+import { format } from 'date-fns'
 import { Ionicons } from '@expo/vector-icons'
 import useStore from '../store/useStore'
 import { getTheme, themes } from '../theme/colors'
@@ -23,6 +24,16 @@ import { makeRedirectUri } from 'expo-auth-session'
 import Card from '../components/Card'
 import ProgressRing from '../components/ProgressRing'
 import { getAIConfig, saveAIConfig, testConnection, type AIConfig } from '../services/ai'
+import {
+  saveCookie,
+  getCookie,
+  saveSemesterStart,
+  getSemesterStart,
+  fetchCourseSchedule,
+  parseManualJson,
+  saveCourses,
+  clearCourses as clearCourseStorage,
+} from '../services/courseSchedule'
 
 WebBrowser.maybeCompleteAuthSession()
 
@@ -94,16 +105,23 @@ const SettingsItem = ({
 const ProfileScreen = () => {
   const {
     themeColor,
+    darkMode,
     setThemeColor,
+    setDarkMode,
     user,
     setUser,
     tasks,
     timeSlots,
     projects,
     habits,
+    courses,
+    semesterStart,
+    setCourses,
+    clearCourses: clearCoursesInStore,
+    setSemesterStart,
     setSyncData,
   } = useStore()
-  const theme = getTheme(themeColor)
+  const theme = getTheme(themeColor, darkMode)
   const [syncing, setSyncing] = useState(false)
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null)
   const lastAutoSyncUserId = useRef<string | null>(null)
@@ -114,8 +132,18 @@ const ProfileScreen = () => {
   const [aiTestStatus, setAiTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
   const [showAISettings, setShowAISettings] = useState(false)
 
+  // Course schedule settings
+  const [showCourseSettings, setShowCourseSettings] = useState(false)
+  const [hubCookie, setHubCookie] = useState('')
+  const [semesterStartInput, setSemesterStartInput] = useState('')
+  const [courseImporting, setCourseImporting] = useState(false)
+  const [manualJsonInput, setManualJsonInput] = useState('')
+  const [showManualImport, setShowManualImport] = useState(false)
+
   useEffect(() => {
     getAIConfig().then(setAiConfig)
+    getCookie().then(c => c && setHubCookie(c))
+    getSemesterStart().then(d => d && setSemesterStartInput(d))
   }, [])
 
   const handleAIConfigChange = (field: keyof AIConfig, value: string) => {
@@ -221,14 +249,46 @@ const ProfileScreen = () => {
         if (completed) habitCompletions++
       })
     })
+
+    const today = new Date()
+    const last7 = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(today)
+      d.setDate(d.getDate() - (6 - i))
+      return format(d, 'yyyy-MM-dd')
+    })
+    const weeklyData = last7.map(date => {
+      const dayTasks = tasks.filter(t => t.dueDate === date)
+      const completed = dayTasks.filter(t => t.status === 'completed').length
+      return { date, total: dayTasks.length, completed }
+    })
+    const totalMinutes = timeSlots.reduce((s, ts) => s + ts.duration, 0)
+    const highP = tasks.filter(t => t.priority === 'high' && t.status !== 'cancelled').length
+    const medP = tasks.filter(t => t.priority === 'medium' && t.status !== 'cancelled').length
+    const lowP = tasks.filter(t => t.priority === 'low' && t.status !== 'cancelled').length
+    const bestStreak = habits.reduce((best, h) => {
+      let streak = 0
+      for (let i = 0; i < 365; i++) {
+        const d = new Date(today)
+        d.setDate(d.getDate() - i)
+        if (h.records[format(d, 'yyyy-MM-dd')]) streak++
+        else break
+      }
+      return Math.max(best, streak)
+    }, 0)
+
     return {
       completedTasks,
       totalTasks,
       completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
       activeHabits,
       habitRate: habitTotal > 0 ? Math.round((habitCompletions / habitTotal) * 100) : 0,
+      weeklyData,
+      totalMinutes,
+      highP, medP, lowP,
+      bestStreak,
+      projectCount: projects.length,
     }
-  }, [tasks, habits])
+  }, [tasks, habits, timeSlots, projects])
 
   // GitHub login
   const handleGitHubLogin = async () => {
@@ -434,6 +494,97 @@ const ProfileScreen = () => {
     ])
   }
 
+  const handleImportCourses = async () => {
+    if (courseImporting) return
+    if (!hubCookie.trim()) {
+      Alert.alert('提示', '请先粘贴 HUB 系统的 Cookie')
+      return
+    }
+
+    // 如果手动填了学期开始日期，先校验格式
+    if (semesterStartInput.trim()) {
+      const dateMatch = semesterStartInput.trim().match(/^\d{4}-\d{2}-\d{2}$/)
+      if (!dateMatch) {
+        Alert.alert('格式错误', '日期格式应为 YYYY-MM-DD（如 2025-02-17）')
+        return
+      }
+    }
+
+    setCourseImporting(true)
+    try {
+      await saveCookie(hubCookie.trim())
+
+      // 如果手动填了日期，先保存
+      if (semesterStartInput.trim()) {
+        await saveSemesterStart(semesterStartInput.trim())
+        setSemesterStart(semesterStartInput.trim())
+      }
+
+      const courseList = await fetchCourseSchedule(hubCookie.trim())
+      await saveCourses(courseList)
+      setCourses(courseList)
+
+      // API 自动保存了学期开始日期，刷新显示
+      const autoStart = await getSemesterStart()
+      if (autoStart && !autoStart.includes('NaN')) {
+        setSemesterStartInput(autoStart)
+        setSemesterStart(autoStart)
+      }
+
+      Alert.alert('导入成功', `已导入 ${courseList.length} 门课程`)
+    } catch (err: any) {
+      Alert.alert('导入失败', err?.message || '请检查 Cookie 是否正确')
+    } finally {
+      setCourseImporting(false)
+    }
+  }
+
+  const handleClearCourses = () => {
+    Alert.alert('确认清除', '确定要清除所有课表数据吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '清除',
+        style: 'destructive',
+        onPress: async () => {
+          await clearCourseStorage()
+          clearCoursesInStore()
+          setHubCookie('')
+          setSemesterStartInput('')
+          Alert.alert('已清除', '课表数据已清除')
+        },
+      },
+    ])
+  }
+
+  const handleManualImport = async () => {
+    if (!manualJsonInput.trim()) {
+      Alert.alert('提示', '请粘贴 API 响应的 JSON 数据')
+      return
+    }
+    if (!semesterStartInput.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(semesterStartInput.trim())) {
+      Alert.alert('提示', '请先填写学期开始日期（如 2025-02-17）')
+      return
+    }
+    setCourseImporting(true)
+    try {
+      await saveSemesterStart(semesterStartInput.trim())
+      setSemesterStart(semesterStartInput.trim())
+      const courseList = parseManualJson(manualJsonInput.trim())
+      if (courseList.length === 0) {
+        throw new Error('未能从 JSON 中解析出课程，请确认数据格式正确')
+      }
+      await saveCourses(courseList)
+      setCourses(courseList)
+      setManualJsonInput('')
+      setShowManualImport(false)
+      Alert.alert('导入成功', `已导入 ${courseList.length} 门课程`)
+    } catch (err: any) {
+      Alert.alert('解析失败', err?.message || '请检查 JSON 格式')
+    } finally {
+      setCourseImporting(false)
+    }
+  }
+
   // No auto-sync in local-only version
 
   return (
@@ -498,6 +649,58 @@ const ProfileScreen = () => {
           </Card>
         </View>
 
+        {/* Analytics */}
+        <Card theme={theme} style={styles.section}>
+          <Text style={[typography.label, { color: theme.text, marginBottom: 12 }]}>
+            本周趋势
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 60, gap: 4 }}>
+            {stats.weeklyData.map((d, i) => {
+              const maxH = 50
+              const h = d.total > 0 ? Math.max(6, (d.completed / d.total) * maxH) : 4
+              const dayLabel = ['一', '二', '三', '四', '五', '六', '日']
+              const dayIdx = new Date(d.date).getDay()
+              return (
+                <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+                  <View style={{
+                    width: '70%', height: h, borderRadius: 3,
+                    backgroundColor: d.completed === d.total && d.total > 0 ? theme.primary : theme.primary + '40',
+                  }} />
+                  <Text style={{ fontSize: 9, color: theme.textSecondary, marginTop: 4 }}>
+                    {dayLabel[dayIdx === 0 ? 6 : dayIdx - 1]}
+                  </Text>
+                </View>
+              )
+            })}
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+            <View style={{ flex: 1, backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 10 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text }}>{Math.round(stats.totalMinutes / 60)}h</Text>
+              <Text style={{ fontSize: 10, color: theme.textSecondary }}>规划总时长</Text>
+            </View>
+            <View style={{ flex: 1, backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 10 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text }}>{stats.bestStreak}天</Text>
+              <Text style={{ fontSize: 10, color: theme.textSecondary }}>最长连续打卡</Text>
+            </View>
+            <View style={{ flex: 1, backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 10 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text }}>{stats.projectCount}</Text>
+              <Text style={{ fontSize: 10, color: theme.textSecondary }}>项目</Text>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 4, marginTop: 12 }}>
+            <View style={{ flex: stats.highP || 1, height: 6, borderRadius: 3, backgroundColor: '#EF4444' }} />
+            <View style={{ flex: stats.medP || 1, height: 6, borderRadius: 3, backgroundColor: '#F59E0B' }} />
+            <View style={{ flex: stats.lowP || 1, height: 6, borderRadius: 3, backgroundColor: '#10B981' }} />
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+            <Text style={{ fontSize: 10, color: '#EF4444' }}>高 {stats.highP}</Text>
+            <Text style={{ fontSize: 10, color: '#F59E0B' }}>中 {stats.medP}</Text>
+            <Text style={{ fontSize: 10, color: '#10B981' }}>低 {stats.lowP}</Text>
+          </View>
+        </Card>
+
         {/* Theme Picker - clean grid */}
         <Card theme={theme} style={styles.section}>
           <Text style={[typography.label, { color: theme.text, marginBottom: 16 }]}>
@@ -543,6 +746,41 @@ const ProfileScreen = () => {
               )
             })}
           </View>
+
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginTop: 20,
+              paddingTop: 16,
+              borderTopWidth: 1,
+              borderTopColor: theme.border,
+            }}
+            onPress={() => setDarkMode(!darkMode)}
+            activeOpacity={0.7}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Ionicons name={darkMode ? 'moon' : 'sunny'} size={20} color={theme.primary} />
+              <Text style={[typography.bodyMedium, { color: theme.text }]}>深色模式</Text>
+            </View>
+            <View style={{
+              width: 44,
+              height: 26,
+              borderRadius: 13,
+              backgroundColor: darkMode ? theme.primary : theme.surfaceSecondary,
+              justifyContent: 'center',
+              paddingHorizontal: 2,
+            }}>
+              <View style={{
+                width: 22,
+                height: 22,
+                borderRadius: 11,
+                backgroundColor: '#fff',
+                alignSelf: darkMode ? 'flex-end' : 'flex-start',
+              }} />
+            </View>
+          </TouchableOpacity>
         </Card>
 
         {/* Data info */}
@@ -558,6 +796,153 @@ const ProfileScreen = () => {
             theme={theme}
             showBorder={false}
           />
+        </Card>
+
+        {/* Course Schedule Settings */}
+        <Card theme={theme} style={styles.section}>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+            onPress={() => setShowCourseSettings(!showCourseSettings)}
+            activeOpacity={0.7}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[typography.label, { color: theme.text }]}>
+                课表设置
+              </Text>
+              {courses.length > 0 && (
+                <View style={{ backgroundColor: theme.primary + '20', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
+                  <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '600' }}>
+                    {courses.length} 门课
+                  </Text>
+                </View>
+              )}
+            </View>
+            <Ionicons
+              name={showCourseSettings ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={theme.textSecondary}
+            />
+          </TouchableOpacity>
+          {showCourseSettings && (
+            <View style={{ marginTop: 16, gap: 12 }}>
+              <View>
+                <Text style={[typography.small, { color: theme.textSecondary, marginBottom: 4 }]}>
+                  学期开始日期（第一周的周一）
+                </Text>
+                <TextInput
+                  style={[styles.aiInput, { backgroundColor: theme.surfaceSecondary, color: theme.text, borderColor: theme.border }]}
+                  value={semesterStartInput}
+                  onChangeText={setSemesterStartInput}
+                  placeholder="2025-02-17"
+                  placeholderTextColor={theme.textSecondary}
+                  autoCapitalize="none"
+                  keyboardType="numbers-and-punctuation"
+                />
+              </View>
+              <View>
+                <Text style={[typography.small, { color: theme.textSecondary, marginBottom: 4 }]}>
+                  HUB Cookie（在浏览器登录后从 F12 中复制）
+                </Text>
+                <TextInput
+                  style={[styles.aiInput, {
+                    backgroundColor: theme.surfaceSecondary,
+                    color: theme.text,
+                    borderColor: theme.border,
+                    minHeight: 80,
+                    textAlignVertical: 'top',
+                  }]}
+                  value={hubCookie}
+                  onChangeText={setHubCookie}
+                  placeholder="粘贴完整的 Cookie 内容..."
+                  placeholderTextColor={theme.textSecondary}
+                  multiline
+                  autoCapitalize="none"
+                />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity
+                  style={[styles.aiTestBtn, { backgroundColor: theme.primary + '18', flex: 1 }]}
+                  onPress={handleImportCourses}
+                  disabled={courseImporting}
+                  activeOpacity={0.7}
+                >
+                  {courseImporting ? (
+                    <ActivityIndicator size="small" color={theme.primary} />
+                  ) : (
+                    <Ionicons name="cloud-download-outline" size={16} color={theme.primary} />
+                  )}
+                  <Text style={[typography.bodyMedium, { color: theme.primary }]}>
+                    导入课表
+                  </Text>
+                </TouchableOpacity>
+                {courses.length > 0 && (
+                  <TouchableOpacity
+                    style={[styles.aiTestBtn, { backgroundColor: theme.error + '18' }]}
+                    onPress={handleClearCourses}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={theme.error} />
+                    <Text style={[typography.bodyMedium, { color: theme.error }]}>
+                      清除
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {/* 手动导入区域 */}
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 }}
+                onPress={() => setShowManualImport(!showManualImport)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="code-slash-outline" size={14} color={theme.textSecondary} />
+                <Text style={[typography.small, { color: theme.primary }]}>
+                  {showManualImport ? '收起手动导入' : '自动导入失败？点击手动导入'}
+                </Text>
+              </TouchableOpacity>
+              {showManualImport && (
+                <View style={{ gap: 8 }}>
+                  <Text style={[typography.small, { color: theme.textSecondary }]}>
+                    步骤：浏览器打开 HUB 课表页 → F12 → Network → 刷新 → 找到 findKbjz 开头的请求 → 点击 → Response 标签 → 全选复制 → 粘贴到下方
+                  </Text>
+                  <TextInput
+                    style={[styles.aiInput, {
+                      backgroundColor: theme.surfaceSecondary,
+                      color: theme.text,
+                      borderColor: theme.border,
+                      minHeight: 100,
+                      textAlignVertical: 'top',
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    }]}
+                    value={manualJsonInput}
+                    onChangeText={setManualJsonInput}
+                    placeholder='粘贴 API 响应 JSON（如 [{"kcmc":"高等数学",...}]）'
+                    placeholderTextColor={theme.textSecondary}
+                    multiline
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity
+                    style={[styles.aiTestBtn, { backgroundColor: theme.success + '18' }]}
+                    onPress={handleManualImport}
+                    disabled={courseImporting}
+                    activeOpacity={0.7}
+                  >
+                    {courseImporting ? (
+                      <ActivityIndicator size="small" color={theme.success} />
+                    ) : (
+                      <Ionicons name="checkmark-circle-outline" size={16} color={theme.success} />
+                    )}
+                    <Text style={[typography.bodyMedium, { color: theme.success }]}>
+                      解析并导入
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              <Text style={[typography.small, { color: theme.textSecondary }]}>
+                从华科 HUB 系统导入课表，课程将作为固定色块显示在时间轴上。AI 规划时会自动避开上课时间。
+              </Text>
+            </View>
+          )}
         </Card>
 
         {/* AI Settings */}

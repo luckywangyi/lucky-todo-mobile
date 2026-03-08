@@ -1,21 +1,24 @@
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer } from '@react-navigation/native'
 import { AppState, AppStateStatus } from 'react-native'
 import * as Notifications from 'expo-notifications'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import TabNavigator from './src/navigation/TabNavigator'
 import useStore from './src/store/useStore'
 import { getTheme } from './src/theme/colors'
 import { updateReminders } from './src/lib/notifications'
 import { syncWithCloud } from './src/lib/cloudSync'
 import { isSupabaseConfigured } from './src/lib/supabase'
+import OnboardingOverlay from './src/components/OnboardingOverlay'
 
 const PERIODIC_SYNC_INTERVAL = 3 * 60 * 1000 // 3分钟定时同步
 const AUTO_SYNC_DELAY = 5000 // 数据变化后5秒防抖同步
 
 export default function App() {
-  const { loadData, themeColor, tasks, timeSlots, projects, habits, user, setSyncData } = useStore()
-  const theme = getTheme(themeColor)
+  const { loadData, themeColor, darkMode, tasks, timeSlots, projects, habits, user, setSyncData } = useStore()
+  const theme = getTheme(themeColor, darkMode)
+  const [showOnboarding, setShowOnboarding] = useState(false)
   const appState = useRef(AppState.currentState)
   const notificationListener = useRef<Notifications.EventSubscription | null>(null)
   const responseListener = useRef<Notifications.EventSubscription | null>(null)
@@ -58,6 +61,8 @@ export default function App() {
     const init = async () => {
       await loadData()
       initialLoadDone.current = true
+      const seen = await AsyncStorage.getItem('lucky-todo-onboarding-done')
+      if (!seen) setShowOnboarding(true)
     }
     init()
 
@@ -148,8 +153,16 @@ export default function App() {
 
   return (
     <NavigationContainer>
-      <StatusBar style="auto" backgroundColor={theme.background} />
+      <StatusBar style={darkMode ? 'light' : 'dark'} backgroundColor={theme.background} />
       <TabNavigator />
+      <OnboardingOverlay
+        visible={showOnboarding}
+        theme={theme}
+        onDone={() => {
+          setShowOnboarding(false)
+          AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
+        }}
+      />
     </NavigationContainer>
   )
 }

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   View,
   Text,
@@ -6,7 +6,10 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
+  ActivityIndicator,
+  Alert,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { format, startOfWeek, addDays, addWeeks, isToday, isFuture, startOfDay } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
@@ -16,17 +19,39 @@ import { typography } from '../theme/typography'
 import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
+import { isAIConfigured, generateHabitInsights, type HabitInsight } from '../services/ai'
 
 const habitIcons = ['🌅', '📚', '🏃', '💪', '🧘', '💧', '🍎', '😴', '✍️', '🎯']
 const habitColors = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EC4899']
 
 const HabitsScreen = () => {
-  const { habits, themeColor, addHabit, toggleHabitDate, deleteHabit } = useStore()
-  const theme = getTheme(themeColor)
+  const { habits, themeColor, darkMode, addHabit, toggleHabitDate, deleteHabit } = useStore()
+  const theme = getTheme(themeColor, darkMode)
   const [showAddModal, setShowAddModal] = useState(false)
   const [newHabitName, setNewHabitName] = useState('')
   const [selectedIcon, setSelectedIcon] = useState('🌅')
   const [selectedColor, setSelectedColor] = useState('#3B82F6')
+
+  const [aiAvailable, setAiAvailable] = useState(false)
+  const [habitInsight, setHabitInsight] = useState<HabitInsight | null>(null)
+  const [habitInsightLoading, setHabitInsightLoading] = useState(false)
+  const [showInsight, setShowInsight] = useState(false)
+  useEffect(() => { isAIConfigured().then(setAiAvailable) }, [])
+
+  const handleHabitInsights = async () => {
+    if (habitInsightLoading || habits.length === 0) return
+    setHabitInsightLoading(true)
+    try {
+      const result = await generateHabitInsights(
+        habits.map(h => ({ name: h.name, icon: h.icon, records: h.records, frequency: h.frequency }))
+      )
+      setHabitInsight(result)
+      setShowInsight(true)
+    } catch (err: any) {
+      Alert.alert('分析失败', err?.message || '请重试')
+    }
+    setHabitInsightLoading(false)
+  }
   const [weekOffset, setWeekOffset] = useState(0)
 
   // Week dates
@@ -87,12 +112,27 @@ const HabitsScreen = () => {
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.background }]}>
         <Text style={[typography.heading1, { color: theme.text }]}>习惯打卡</Text>
-        <TouchableOpacity
-          style={[styles.addButton, { backgroundColor: theme.primary }]}
-          onPress={() => setShowAddModal(true)}
-        >
-          <Ionicons name="add" size={24} color="white" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {aiAvailable && habits.length > 0 && (
+            <TouchableOpacity
+              style={[styles.addButton, { backgroundColor: theme.primary + '18', borderWidth: 1.5, borderColor: theme.primary }]}
+              onPress={handleHabitInsights}
+              disabled={habitInsightLoading}
+            >
+              {habitInsightLoading ? (
+                <ActivityIndicator size={16} color={theme.primary} />
+              ) : (
+                <Ionicons name="sparkles" size={20} color={theme.primary} />
+              )}
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.addButton, { backgroundColor: theme.primary }]}
+            onPress={() => setShowAddModal(true)}
+          >
+            <Ionicons name="add" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Week calendar */}
@@ -234,7 +274,12 @@ const HabitsScreen = () => {
                           opacity: isFutureDate ? 0.3 : 1,
                         },
                       ]}
-                      onPress={() => toggleHabitDate(habit.id, dateKey)}
+                      onPress={() => {
+                        const wasChecked = habit.records[dateKey]
+                        if (!wasChecked) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+                        else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                        toggleHabitDate(habit.id, dateKey)
+                      }}
                     >
                       {isChecked && <Ionicons name="checkmark" size={18} color="white" />}
                     </TouchableOpacity>
@@ -322,6 +367,39 @@ const HabitsScreen = () => {
           <Ionicons name="add-circle-outline" size={20} color="white" />
           <Text style={styles.submitBtnText}>创建习惯</Text>
         </TouchableOpacity>
+      </BottomSheet>
+
+      {/* Habit Insights */}
+      <BottomSheet
+        visible={showInsight && !!habitInsight}
+        onClose={() => setShowInsight(false)}
+        theme={theme}
+        title="AI 习惯分析"
+      >
+        {habitInsight && (
+          <View style={{ gap: 14 }}>
+            <Text style={[typography.body, { color: theme.text, lineHeight: 20 }]}>{habitInsight.summary}</Text>
+            <View style={{ backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 12 }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: theme.text, marginBottom: 4 }}>连续打卡分析</Text>
+              <Text style={{ fontSize: 12, color: theme.textSecondary, lineHeight: 18 }}>{habitInsight.streakAnalysis}</Text>
+            </View>
+            <View style={{ backgroundColor: theme.surfaceSecondary, borderRadius: 8, padding: 12 }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: theme.text, marginBottom: 4 }}>最佳坚持日</Text>
+              <Text style={{ fontSize: 12, color: theme.textSecondary }}>{habitInsight.bestDay}</Text>
+            </View>
+            {habitInsight.suggestions.length > 0 && (
+              <View>
+                <Text style={[typography.label, { color: theme.text, marginBottom: 6 }]}>改进建议</Text>
+                {habitInsight.suggestions.map((s, i) => (
+                  <Text key={i} style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 3 }}>· {s}</Text>
+                ))}
+              </View>
+            )}
+            <Text style={{ fontSize: 13, color: theme.primary, fontStyle: 'italic', textAlign: 'center', marginTop: 4 }}>
+              {habitInsight.encouragement}
+            </Text>
+          </View>
+        )}
       </BottomSheet>
     </View>
   )
