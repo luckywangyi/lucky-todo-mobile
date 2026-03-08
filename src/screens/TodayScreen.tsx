@@ -1405,13 +1405,75 @@ const TodayScreen = () => {
       <View style={{ flex: 1 }} {...swipePanResponder.panHandlers}>
       {viewMode === 'timeline' ? (
         <View style={{ flex: 1 }}>
+          {/* Unscheduled tasks at top, before timeline */}
+          {unscheduledTasks.length > 0 && (
+            <View style={[styles.unscheduledSection, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <TouchableOpacity
+                style={styles.unschedHeader}
+                onPress={() => setUnschedExpanded(!unschedExpanded)}
+                activeOpacity={0.7}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={[typography.label, { color: theme.textSecondary }]}>
+                    待安排
+                  </Text>
+                  <View style={[styles.unschedBadge, { backgroundColor: theme.primary + '20' }]}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: theme.primary }}>
+                      {unscheduledTasks.length}
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons
+                  name={unschedExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={theme.textSecondary}
+                />
+              </TouchableOpacity>
+              {unschedExpanded && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ paddingHorizontal: 20, gap: 10, paddingBottom: 4 }}
+                >
+                  {unscheduledTasks.map((task) => (
+                    <TouchableOpacity
+                      key={task.id}
+                      style={[
+                        styles.unschedCard,
+                        {
+                          backgroundColor: theme.card,
+                          borderWidth: 1,
+                          borderColor: theme.border,
+                          borderLeftWidth: 4,
+                          borderLeftColor: priorityColors[task.priority],
+                        },
+                      ]}
+                      onPress={() => openTimePickerForTask(task)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[typography.bodyMedium, { color: theme.text }]} numberOfLines={2}>
+                        {task.title}
+                      </Text>
+                      <View style={styles.unschedHintRow}>
+                        <Ionicons name="time-outline" size={11} color={theme.textSecondary} />
+                        <Text style={[typography.small, { color: theme.textSecondary }]}>
+                          点击安排
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          )}
+
           <View style={[styles.tlSection, { paddingBottom: 0, flex: 1 }]}>
             {renderTimeline()}
           </View>
 
-          {/* Floating AI buttons */}
+          {/* Floating AI buttons — normal flow, sits above tab bar */}
           {aiAvailable && (unscheduledTasks.length > 0 || todayTasks.length > 0) && (
-            <View style={styles.floatingAiRow}>
+            <View style={[styles.floatingAiRow, { marginBottom: tabBarHeight + 12 }]}>
               {unscheduledTasks.length > 0 && (
                 <TouchableOpacity
                   style={[styles.floatingAiBtn, { backgroundColor: theme.primary + '15', borderColor: theme.primary + '30' }]}
@@ -1455,67 +1517,6 @@ const TodayScreen = () => {
                 )}
                 <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '600' }}>周报</Text>
               </TouchableOpacity>
-            </View>
-          )}
-
-          {unscheduledTasks.length > 0 && (
-            <View style={[styles.unscheduledSection, { borderTopWidth: 1, borderTopColor: theme.border }]}>
-              <TouchableOpacity
-                style={styles.unschedHeader}
-                onPress={() => setUnschedExpanded(!unschedExpanded)}
-                activeOpacity={0.7}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={[typography.label, { color: theme.textSecondary }]}>
-                    待安排
-                  </Text>
-                  <View style={[styles.unschedBadge, { backgroundColor: theme.primary + '20' }]}>
-                    <Text style={{ fontSize: 11, fontWeight: '700', color: theme.primary }}>
-                      {unscheduledTasks.length}
-                    </Text>
-                  </View>
-                </View>
-                <Ionicons
-                  name={unschedExpanded ? 'chevron-down' : 'chevron-up'}
-                  size={18}
-                  color={theme.textSecondary}
-                />
-              </TouchableOpacity>
-              {unschedExpanded && (
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={{ paddingHorizontal: 20, gap: 10, paddingBottom: 4 }}
-                >
-                  {unscheduledTasks.map((task) => (
-                    <TouchableOpacity
-                      key={task.id}
-                      style={[
-                        styles.unschedCard,
-                        {
-                          backgroundColor: theme.card,
-                          borderWidth: 1,
-                          borderColor: theme.border,
-                          borderLeftWidth: 4,
-                          borderLeftColor: priorityColors[task.priority],
-                        },
-                      ]}
-                      onPress={() => openTimePickerForTask(task)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[typography.bodyMedium, { color: theme.text }]} numberOfLines={2}>
-                        {task.title}
-                      </Text>
-                      <View style={styles.unschedHintRow}>
-                        <Ionicons name="time-outline" size={11} color={theme.textSecondary} />
-                        <Text style={[typography.small, { color: theme.textSecondary }]}>
-                          点击安排
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              )}
             </View>
           )}
         </View>
@@ -1816,7 +1817,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 4,
+    paddingVertical: 6,
   },
   floatingAiBtn: {
     flexDirection: 'row',
