@@ -9,9 +9,7 @@
     "newArchEnabled": true,
     "scheme": "lucky-todo-mobile",
     "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#7C5CBF"
+      "backgroundColor": "#F5F5F5"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,7 +18,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#7C5CBF"
+        "backgroundColor": "#FFFFFF"
       },
       "package": "com.luckytodo.mobile",
       "edgeToEdgeEnabled": true

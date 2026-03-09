@@ -11,6 +11,8 @@ import {
 import { impactLight, notificationSuccess } from '../lib/haptics'
 import { format, startOfWeek, addDays, addWeeks, isToday, isFuture, startOfDay } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
+
+const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 import { Ionicons } from '@expo/vector-icons'
 import useStore from '../store/useStore'
 import { getTheme } from '../theme/colors'
@@ -111,11 +113,16 @@ const HabitsScreen = () => {
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.background }]}>
-        <Text style={[typography.heading1, { color: theme.text }]}>习惯打卡</Text>
+        <View>
+          <Text style={[typography.heading1, { color: theme.text }]}>习惯打卡</Text>
+          <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 4 }]}>
+            {habits.length} 个习惯
+          </Text>
+        </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {aiAvailable && habits.length > 0 && (
             <TouchableOpacity
-              style={[styles.addButton, { backgroundColor: theme.primary + '18', borderWidth: 1.5, borderColor: theme.primary }]}
+              style={[styles.addButton, { backgroundColor: theme.card, borderWidth: 1.5, borderColor: theme.primary }]}
               onPress={handleHabitInsights}
               disabled={habitInsightLoading}
             >
@@ -168,35 +175,31 @@ const HabitsScreen = () => {
           {weekDates.map((date, index) => {
             const dayIsToday = isToday(date)
             const dateKey = format(date, 'yyyy-MM-dd')
-            // Check if any habit was completed on this day
             const hasRecord = habits.some((h) => h.records[dateKey])
 
             return (
               <View key={index} style={styles.dayCol}>
-                <Text style={[typography.small, { color: theme.textSecondary }]}>
-                  {format(date, 'EEE', { locale: zhCN })}
+                <Text style={[styles.dayLabel, { color: dayIsToday ? theme.primary : theme.textSecondary }]}>
+                  {DAY_LABELS[index]}
                 </Text>
-                <View
-                  style={[
-                    styles.dayCircle,
-                    dayIsToday && { backgroundColor: theme.primary },
-                  ]}
-                >
+                <View style={styles.dayCircle}>
+                  {dayIsToday && (
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.primary, borderRadius: 16, overflow: 'hidden' }]} />
+                  )}
                   <Text
                     style={[
                       styles.dayNum,
                       {
-                        color: dayIsToday ? 'white' : theme.text,
-                        fontWeight: dayIsToday ? '700' : '500',
+                        color: dayIsToday ? '#fff' : theme.text,
+                        fontWeight: dayIsToday ? '700' : '600',
                       },
                     ]}
                   >
                     {format(date, 'd')}
                   </Text>
                 </View>
-                {/* Dot indicator for completed habits */}
                 {hasRecord && (
-                  <View style={[styles.dayDot, { backgroundColor: theme.primary }]} />
+                  <View style={[styles.dayDot, { backgroundColor: dayIsToday ? theme.primary + '60' : theme.primary }]} />
                 )}
               </View>
             )
@@ -243,7 +246,7 @@ const HabitsScreen = () => {
 
               {/* Week progress bar */}
               <View style={styles.weekProgressRow}>
-                <View style={[styles.weekProgressTrack, { backgroundColor: theme.border }]}>
+                <View style={[styles.weekProgressTrack, { backgroundColor: theme.surfaceSecondary }]}>
                   <View
                     style={[
                       styles.weekProgressFill,
@@ -269,7 +272,7 @@ const HabitsScreen = () => {
                       style={[
                         styles.checkBtn,
                         {
-                          backgroundColor: isChecked ? theme.primary : theme.card,
+                          backgroundColor: isChecked ? theme.primary : theme.surfaceSecondary,
                           borderColor: isChecked ? theme.primary : theme.border,
                           opacity: isFutureDate ? 0.3 : 1,
                         },
@@ -446,17 +449,22 @@ const styles = StyleSheet.create({
   },
   daysRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    marginTop: 8,
+    marginBottom: 4,
   },
   dayCol: {
     alignItems: 'center',
     gap: 4,
     flex: 1,
   },
+  dayLabel: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
   dayCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -467,7 +475,6 @@ const styles = StyleSheet.create({
     width: 5,
     height: 5,
     borderRadius: 2.5,
-    marginTop: 2,
   },
   scrollContent: {
     padding: 20,

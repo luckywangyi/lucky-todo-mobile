@@ -24,11 +24,15 @@ interface AppState {
   
   // 用户
   user: UserProfile | null
+  profileName: string
+  profileAvatar: string | null
   
   // Actions
   setThemeColor: (color: ThemeColor) => void
   setDarkMode: (dark: boolean) => void
   setUser: (user: UserProfile | null) => void
+  setProfileName: (name: string) => void
+  setProfileAvatar: (uri: string | null) => void
   
   // Task actions
   addTask: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>) => void
@@ -80,6 +84,8 @@ const useStore = create<AppState>((set, get) => ({
   themeColor: 'ocean',
   darkMode: false,
   user: null,
+  profileName: 'Lucky Todo',
+  profileAvatar: null,
 
   setThemeColor: (themeColor) => {
     set({ themeColor })
@@ -92,6 +98,20 @@ const useStore = create<AppState>((set, get) => ({
   },
 
   setUser: (user) => set({ user }),
+
+  setProfileName: (profileName) => {
+    set({ profileName })
+    AsyncStorage.setItem('lucky-todo-profile-name', profileName)
+  },
+
+  setProfileAvatar: (profileAvatar) => {
+    set({ profileAvatar })
+    if (profileAvatar) {
+      AsyncStorage.setItem('lucky-todo-profile-avatar', profileAvatar)
+    } else {
+      AsyncStorage.removeItem('lucky-todo-profile-avatar')
+    }
+  },
 
   addTask: (taskData) => {
     const newTask: Task = {
@@ -357,7 +377,7 @@ const useStore = create<AppState>((set, get) => ({
 
   loadData: async () => {
     try {
-      const [tasksJson, timeSlotsJson, projectsJson, habitsJson, themeJson, darkModeJson, coursesJson, semesterStartJson, courseGoalsJson] = await Promise.all([
+      const [tasksJson, timeSlotsJson, projectsJson, habitsJson, themeJson, darkModeJson, coursesJson, semesterStartJson, courseGoalsJson, profileNameJson, profileAvatarJson] = await Promise.all([
         AsyncStorage.getItem('lucky-todo-tasks'),
         AsyncStorage.getItem('lucky-todo-timeSlots'),
         AsyncStorage.getItem('lucky-todo-projects'),
@@ -367,6 +387,8 @@ const useStore = create<AppState>((set, get) => ({
         AsyncStorage.getItem('lucky-todo-courses'),
         AsyncStorage.getItem('lucky-todo-semester-start'),
         AsyncStorage.getItem('lucky-todo-course-goals'),
+        AsyncStorage.getItem('lucky-todo-profile-name'),
+        AsyncStorage.getItem('lucky-todo-profile-avatar'),
       ])
 
       const updates: Partial<AppState> = {}
@@ -417,6 +439,12 @@ const useStore = create<AppState>((set, get) => ({
       }
       if (courseGoalsJson) {
         try { updates.courseGoals = JSON.parse(courseGoalsJson) } catch { /* ignore */ }
+      }
+      if (profileNameJson) {
+        updates.profileName = profileNameJson
+      }
+      if (profileAvatarJson) {
+        updates.profileAvatar = profileAvatarJson
       }
 
       // ===== MOCK 课表数据（打包前删除） =====

@@ -1414,11 +1414,13 @@ const TodayScreen = () => {
                 ]}>
                   {DAY_LABELS[i]}
                 </Text>
-                <View style={[
-                  styles.weekDayDateWrap,
-                  isSelected && { backgroundColor: theme.primary },
-                  isRealToday && !isSelected && { borderWidth: 1.5, borderColor: theme.primary },
-                ]}>
+                <View style={styles.weekDayDateWrap}>
+                  {isSelected && (
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.primary, borderRadius: 16, overflow: 'hidden' }]} />
+                  )}
+                  {isRealToday && !isSelected && (
+                    <View style={[StyleSheet.absoluteFill, { borderWidth: 1.5, borderColor: theme.primary, borderRadius: 16 }]} />
+                  )}
                   <Text style={[
                     styles.weekDayDate,
                     { color: isSelected ? '#fff' : isRealToday ? theme.primary : theme.text },
@@ -1843,8 +1845,8 @@ const TodayScreen = () => {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   headerGradient: {
-    paddingTop: 44,
-    paddingBottom: 2,
+    paddingTop: 48,
+    paddingBottom: 10,
     paddingHorizontal: 16,
   },
   headerRow: {
@@ -1873,25 +1875,24 @@ const styles = StyleSheet.create({
   },
   weekStrip: {
     flexDirection: 'row',
-    marginTop: 6,
-    marginBottom: 2,
+    marginTop: 8,
+    marginBottom: 4,
   },
   weekDayItem: {
     flex: 1,
     alignItems: 'center',
-    gap: 2,
+    gap: 4,
   },
   weekDayLabel: {
     fontSize: 10,
     fontWeight: '500',
   },
   weekDayDateWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
   },
   weekDayDate: {
     fontSize: 13,

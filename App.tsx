@@ -18,7 +18,7 @@ import { getTheme } from './src/theme/colors'
 import { updateReminders } from './src/lib/notifications'
 import { syncWithCloud } from './src/lib/cloudSync'
 import { isSupabaseConfigured } from './src/lib/supabase'
-import OnboardingOverlay from './src/components/OnboardingOverlay'
+import { AlertProvider } from './src/components/CustomAlert'
 
 const PERIODIC_SYNC_INTERVAL = 3 * 60 * 1000 // 3分钟定时同步
 const AUTO_SYNC_DELAY = 5000 // 数据变化后5秒防抖同步
@@ -26,7 +26,6 @@ const AUTO_SYNC_DELAY = 5000 // 数据变化后5秒防抖同步
 export default function App() {
   const { loadData, themeColor, darkMode, tasks, timeSlots, projects, habits, user, setSyncData } = useStore()
   const theme = getTheme(themeColor, darkMode)
-  const [showOnboarding, setShowOnboarding] = useState(false)
   const appState = useRef(AppState.currentState)
   const notificationListener = useRef<Notifications.EventSubscription | null>(null)
   const responseListener = useRef<Notifications.EventSubscription | null>(null)
@@ -69,8 +68,7 @@ export default function App() {
     const init = async () => {
       await loadData()
       initialLoadDone.current = true
-      const seen = await AsyncStorage.getItem('lucky-todo-onboarding-done')
-      if (!seen) setShowOnboarding(true)
+      await AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
     }
     init()
 
@@ -161,18 +159,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <StatusBar style={darkMode ? 'light' : 'dark'} backgroundColor={theme.background} />
-        <TabNavigator />
-        <OnboardingOverlay
-          visible={showOnboarding}
-          theme={theme}
-          onDone={() => {
-            setShowOnboarding(false)
-            AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
-          }}
-        />
-      </NavigationContainer>
+      <AlertProvider theme={theme}>
+        <NavigationContainer>
+          <StatusBar style={darkMode ? 'light' : 'dark'} backgroundColor={theme.background} />
+          <TabNavigator />
+        </NavigationContainer>
+      </AlertProvider>
     </SafeAreaProvider>
   )
 }

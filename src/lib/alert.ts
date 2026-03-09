@@ -6,11 +6,24 @@ type AlertButton = {
   onPress?: () => void
 }
 
+let _customShowAlert: ((config: { title: string; message: string; buttons?: AlertButton[] }) => void) | null = null
+
+export function registerCustomAlert(
+  fn: (config: { title: string; message: string; buttons?: AlertButton[] }) => void
+) {
+  _customShowAlert = fn
+}
+
 export function crossAlert(
   title: string,
   message: string,
   buttons?: AlertButton[]
 ) {
+  if (_customShowAlert) {
+    _customShowAlert({ title, message, buttons })
+    return
+  }
+
   if (Platform.OS === 'web') {
     if (!buttons || buttons.length === 0) {
       window.alert(`${title}\n${message}`)

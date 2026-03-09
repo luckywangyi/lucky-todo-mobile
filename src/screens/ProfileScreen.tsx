@@ -9,7 +9,9 @@ import {
   Linking,
   TextInput,
   ActivityIndicator,
+  Modal,
 } from 'react-native'
+import * as ImagePicker from 'expo-image-picker'
 import { format } from 'date-fns'
 import { Ionicons } from '@expo/vector-icons'
 import useStore from '../store/useStore'
@@ -120,11 +122,19 @@ const ProfileScreen = () => {
     clearCourses: clearCoursesInStore,
     setSemesterStart,
     setSyncData,
+    profileName,
+    profileAvatar,
+    setProfileName,
+    setProfileAvatar,
   } = useStore()
   const theme = getTheme(themeColor, darkMode)
   const [syncing, setSyncing] = useState(false)
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null)
   const lastAutoSyncUserId = useRef<string | null>(null)
+
+  // Profile editing
+  const [showNameEdit, setShowNameEdit] = useState(false)
+  const [editingName, setEditingName] = useState('')
 
   // AI settings
   const [aiConfig, setAiConfig] = useState<AIConfig>({ endpoint: '', apiKey: '', model: '' })
@@ -585,7 +595,26 @@ const ProfileScreen = () => {
     }
   }
 
-  // No auto-sync in local-only version
+  const pickAvatar = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1] as [number, number],
+      quality: 0.8,
+      allowsMultipleSelection: false,
+    })
+    if (!result.canceled && result.assets[0]) {
+      setProfileAvatar(result.assets[0].uri)
+    }
+  }
+
+  const handleSaveName = () => {
+    const trimmed = editingName.trim()
+    if (trimmed) {
+      setProfileName(trimmed)
+    }
+    setShowNameEdit(false)
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -596,12 +625,63 @@ const ProfileScreen = () => {
       >
         {/* Profile Card */}
         <View style={[styles.profileCard, { backgroundColor: theme.primary }]}>
-          <View style={styles.avatarPlaceholder}>
-            <Ionicons name="person" size={36} color="rgba(255,255,255,0.7)" />
-          </View>
-          <Text style={styles.userName}>Lucky Todo</Text>
-          <Text style={styles.userEmail}>本地版 · 数据仅存储在本机</Text>
+          <TouchableOpacity onPress={pickAvatar} activeOpacity={0.8}>
+            <View style={{ width: 88, height: 88 }}>
+              <View style={styles.avatarRing}>
+                {profileAvatar ? (
+                  <Image source={{ uri: profileAvatar }} style={styles.avatar} resizeMode="cover" />
+                ) : (
+                  <View style={styles.avatarPlaceholderInner}>
+                    <Ionicons name="person" size={36} color="rgba(255,255,255,0.7)" />
+                  </View>
+                )}
+              </View>
+              <View style={styles.avatarEditBadge}>
+                <Ionicons name="camera" size={12} color="#fff" />
+              </View>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => { setEditingName(profileName); setShowNameEdit(true) }}
+            activeOpacity={0.7}
+            style={{ marginTop: 4 }}
+          >
+            <Text style={styles.userName}>{profileName}</Text>
+          </TouchableOpacity>
         </View>
+
+        {/* Name edit modal */}
+        <Modal visible={showNameEdit} transparent animationType="fade" onRequestClose={() => setShowNameEdit(false)}>
+          <TouchableOpacity style={styles.nameModalOverlay} activeOpacity={1} onPress={() => setShowNameEdit(false)}>
+            <TouchableOpacity activeOpacity={1} style={[styles.nameModalCard, { backgroundColor: theme.card }]}>
+              <Text style={[typography.heading2, { color: theme.text, marginBottom: 16 }]}>修改昵称</Text>
+              <TextInput
+                style={[styles.nameInput, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border, color: theme.text }]}
+                value={editingName}
+                onChangeText={setEditingName}
+                placeholder="输入昵称"
+                placeholderTextColor={theme.textSecondary}
+                autoFocus
+                maxLength={20}
+                onSubmitEditing={handleSaveName}
+              />
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+                <TouchableOpacity
+                  style={[styles.nameModalBtn, { backgroundColor: theme.surfaceSecondary }]}
+                  onPress={() => setShowNameEdit(false)}
+                >
+                  <Text style={[typography.body, { color: theme.textSecondary }]}>取消</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.nameModalBtn, { backgroundColor: theme.primary, flex: 1 }]}
+                  onPress={handleSaveName}
+                >
+                  <Text style={[typography.body, { color: '#fff', fontWeight: '600' }]}>保存</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
 
         {/* Stats */}
         <View style={styles.statsGrid}>
@@ -611,7 +691,7 @@ const ProfileScreen = () => {
               size={56}
               strokeWidth={5}
               color={theme.primary}
-              backgroundColor={theme.border}
+              backgroundColor={theme.surfaceSecondary}
             >
               <Text style={[styles.ringText, { color: theme.primary }]}>
                 {stats.completionRate}%
@@ -632,7 +712,7 @@ const ProfileScreen = () => {
               size={56}
               strokeWidth={5}
               color={theme.success}
-              backgroundColor={theme.border}
+              backgroundColor={theme.surfaceSecondary}
             >
               <Text style={[styles.ringText, { color: theme.success }]}>
                 {stats.habitRate}%
@@ -1081,21 +1161,59 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
+    overflow: 'hidden',
   },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 82,
+    height: 82,
+    borderRadius: 41,
   },
-  avatarPlaceholder: {
+  avatarPlaceholderInner: {
     width: 80,
     height: 80,
     borderRadius: 40,
     backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
+  },
+  avatarEditBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  nameModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  nameModalCard: {
+    width: '100%',
+    borderRadius: 20,
+    padding: 24,
+  },
+  nameInput: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+  },
+  nameModalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   userName: {
     fontSize: 22,
