@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer } from '@react-navigation/native'
-import { AppState, AppStateStatus } from 'react-native'
+import { AppState, AppStateStatus, Platform } from 'react-native'
+
+if (Platform.OS === 'web' && !document.getElementById('lucky-todo-global-style')) {
+  const style = document.createElement('style')
+  style.id = 'lucky-todo-global-style'
+  style.textContent = 'input,textarea,select,button,div,a{outline:none!important;-webkit-tap-highlight-color:transparent}'
+  document.head.appendChild(style)
+}
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'

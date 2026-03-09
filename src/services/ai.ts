@@ -100,7 +100,12 @@ export async function parseNaturalLanguage(input: string, todayISO: string): Pro
   ]
 
   const reply = await chatCompletion(messages)
-  const parsed = JSON.parse(extractJSON(reply)) as ParsedTask
+  let parsed: ParsedTask
+  try {
+    parsed = JSON.parse(extractJSON(reply)) as ParsedTask
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
   if (!parsed.title) throw new Error('解析失败：缺少标题')
   return parsed
 }
@@ -122,7 +127,12 @@ export async function generateSubtasks(
   ]
 
   const reply = await chatCompletion(messages)
-  const parsed = JSON.parse(extractJSON(reply))
+  let parsed: any
+  try {
+    parsed = JSON.parse(extractJSON(reply))
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
   if (!Array.isArray(parsed)) return []
   return parsed.map((t: any) => ({
     title: typeof t === 'string' ? t : (t.title || t.name || ''),
@@ -167,7 +177,11 @@ export async function generateDailySummary(
   ]
 
   const reply = await chatCompletion(messages)
-  return JSON.parse(extractJSON(reply)) as DailySummary
+  try {
+    return JSON.parse(extractJSON(reply)) as DailySummary
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
 }
 
 // ---- AI 自动规划时间轴 ----
@@ -236,7 +250,12 @@ export async function generateSchedule(
   ]
 
   const reply = await chatCompletion(messages)
-  const parsed = JSON.parse(extractJSON(reply))
+  let parsed: any
+  try {
+    parsed = JSON.parse(extractJSON(reply))
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
   if (!Array.isArray(parsed)) return []
 
   const raw = parsed
@@ -353,7 +372,12 @@ ${taskList}
   ]
 
   const reply = await chatCompletion(messages)
-  const parsed = JSON.parse(extractJSON(reply)) as { courseId: string; taskId: string }
+  let parsed: { courseId: string; taskId: string }
+  try {
+    parsed = JSON.parse(extractJSON(reply)) as { courseId: string; taskId: string }
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
   if (!parsed.courseId || !parsed.taskId) throw new Error('解析失败')
   if (!todayCourses.find((c) => c.id === parsed.courseId)) {
     throw new Error('未能匹配到课程')
@@ -415,7 +439,11 @@ export async function generateMorningBriefing(
   ]
 
   const reply = await chatCompletion(messages)
-  return JSON.parse(extractJSON(reply)) as MorningBriefing
+  try {
+    return JSON.parse(extractJSON(reply)) as MorningBriefing
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
 }
 
 // ---- 自然语言改排 ----
@@ -470,7 +498,11 @@ ${slotList || '  无'}
   ]
 
   const reply = await chatCompletion(messages)
-  return JSON.parse(extractJSON(reply)) as ScheduleCommand
+  try {
+    return JSON.parse(extractJSON(reply)) as ScheduleCommand
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
 }
 
 // ---- 周报总结 ----
@@ -512,7 +544,11 @@ export async function generateWeeklyReview(
   ]
 
   const reply = await chatCompletion(messages)
-  return JSON.parse(extractJSON(reply)) as WeeklyReview
+  try {
+    return JSON.parse(extractJSON(reply)) as WeeklyReview
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
 }
 
 // ---- AI 项目规划 ----
@@ -549,7 +585,12 @@ export async function generateProjectPlan(
   ]
 
   const reply = await chatCompletion(messages)
-  const raw = JSON.parse(extractJSON(reply))
+  let raw: any
+  try {
+    raw = JSON.parse(extractJSON(reply))
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
   const phases = (raw.phases || []).map((p: any) => ({
     title: p.title || p.name || '',
     description: p.description || '',
@@ -603,7 +644,11 @@ export async function generateHabitInsights(
   ]
 
   const reply = await chatCompletion(messages)
-  return JSON.parse(extractJSON(reply)) as HabitInsight
+  try {
+    return JSON.parse(extractJSON(reply)) as HabitInsight
+  } catch {
+    throw new Error('AI 返回格式异常，请重试')
+  }
 }
 
 // ---- 测试连接 ----

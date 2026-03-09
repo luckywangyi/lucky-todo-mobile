@@ -6,11 +6,11 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Alert,
   ActivityIndicator,
   RefreshControl,
 } from 'react-native'
-import * as Haptics from 'expo-haptics'
+import { impactLight, notificationSuccess } from '../lib/haptics'
+import { crossAlert } from '../lib/alert'
 import { format, parseISO, isToday, isTomorrow, isYesterday, isPast } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
@@ -52,7 +52,7 @@ const TasksScreen = () => {
   const [refreshing, setRefreshing] = useState(false)
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    impactLight()
     try {
       const { user, tasks, timeSlots, projects, habits, setSyncData } = useStore.getState()
       if (user && isSupabaseConfigured()) {
@@ -86,7 +86,7 @@ const TasksScreen = () => {
       const result = await parseNaturalLanguage(aiInput, format(new Date(), 'yyyy-MM-dd'))
       setAiResult(result)
     } catch (err: any) {
-      Alert.alert('AI 解析失败', err?.message || '请重试')
+      crossAlert('AI 解析失败', err?.message || '请重试')
     }
     setAiLoading(false)
   }
@@ -138,8 +138,8 @@ const TasksScreen = () => {
       filteredTasks = filteredTasks.filter(t =>
         t.title.toLowerCase().includes(q) ||
         t.description?.toLowerCase().includes(q) ||
-        t.tags.some(tag => tag.toLowerCase().includes(q)) ||
-        t.subtasks.some(s => s.title.toLowerCase().includes(q))
+        (t.tags ?? []).some(tag => tag.toLowerCase().includes(q)) ||
+        (t.subtasks ?? []).some(s => s.title.toLowerCase().includes(q))
       )
     }
 
@@ -196,13 +196,13 @@ const TasksScreen = () => {
 
   const toggleTask = (task: Task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
-    if (newStatus === 'completed') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-    else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    if (newStatus === 'completed') notificationSuccess()
+    else impactLight()
     updateTask(task.id, { status: newStatus })
   }
 
   const handleDelete = (task: Task) => {
-    Alert.alert('确认删除', `确定要删除任务「${task.title}」吗？`, [
+    crossAlert('确认删除', `确定要删除任务「${task.title}」吗？`, [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: () => deleteTask(task.id) },
     ])
@@ -281,14 +281,12 @@ const TasksScreen = () => {
       </View>
 
       {/* Filter */}
-      <View style={[styles.filterWrapper, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border }]}>
-        <FilterPills
-          theme={theme}
-          options={filterOptions}
-          selected={filter}
-          onSelect={setFilter}
-        />
-      </View>
+      <FilterPills
+        theme={theme}
+        options={filterOptions}
+        selected={filter}
+        onSelect={setFilter}
+      />
 
       {/* Task list */}
       <ScrollView
@@ -329,12 +327,16 @@ const TasksScreen = () => {
           <EmptyState
             theme={theme}
             icon={filter === 'completed' ? 'checkmark-done-outline' : 'calendar-outline'}
-            title={filter === 'completed' ? '暂无已完成任务' : '暂无待完成任务'}
+            title={filter === 'completed' ? '暂无已完成任务' : filter === 'all' ? '还没有任务' : '暂无待完成任务'}
             subtitle={
-              filter === 'completed' ? '完成任务后会显示在这里' : '点击右上角添加新任务'
+              filter === 'completed'
+                ? '完成任务后会显示在这里'
+                : searchQuery.trim()
+                  ? '没有匹配的任务'
+                  : '点击右上角添加新任务'
             }
-            actionLabel={filter !== 'completed' ? '添加任务' : undefined}
-            onAction={filter !== 'completed' ? () => setShowAddModal(true) : undefined}
+            actionLabel={filter !== 'completed' && !searchQuery.trim() ? '添加任务' : undefined}
+            onAction={filter !== 'completed' && !searchQuery.trim() ? () => setShowAddModal(true) : undefined}
           />
         )}
       </ScrollView>
@@ -342,7 +344,12 @@ const TasksScreen = () => {
       {/* Add task bottom sheet */}
       <BottomSheet
         visible={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        onClose={() => {
+          setShowAddModal(false)
+          setNewTaskTitle('')
+          setNewTaskPriority('medium')
+          setAiSubtasks([])
+        }}
         theme={theme}
         title="新建任务"
       >

@@ -112,8 +112,8 @@ const useStore = create<AppState>((set, get) => ({
         const updatedTask = { ...task, ...updates, updatedAt: new Date().toISOString() }
         
         // 如果主任务标记为完成，自动将所有子任务也标记为完成
-        if (updates.status === 'completed' && task.subtasks.length > 0) {
-          updatedTask.subtasks = task.subtasks.map(st => ({ ...st, completed: true }))
+        if (updates.status === 'completed' && (task.subtasks ?? []).length > 0) {
+          updatedTask.subtasks = (task.subtasks ?? []).map(st => ({ ...st, completed: true }))
         }
         // 如果主任务标记为未完成，保持子任务状态不变（用户可能只想重新开始部分子任务）
         
@@ -143,7 +143,7 @@ const useStore = create<AppState>((set, get) => ({
         if (task.id === taskId) {
           return {
             ...task,
-            subtasks: task.subtasks.map((st) =>
+            subtasks: (task.subtasks ?? []).map((st) =>
               st.id === subtaskId ? { ...st, completed: !st.completed } : st
             ),
             updatedAt: new Date().toISOString(),

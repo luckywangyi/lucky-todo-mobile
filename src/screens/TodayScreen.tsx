@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   StatusBar,
-  Alert,
   Dimensions,
   Animated,
   ActivityIndicator,
@@ -14,7 +13,7 @@ import {
   PanResponder,
   RefreshControl,
 } from 'react-native'
-import * as Haptics from 'expo-haptics'
+import { impactLight, impactMedium, notificationSuccess } from '../lib/haptics'
 import { format } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
@@ -29,6 +28,7 @@ import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
 import CelebrationOverlay from '../components/CelebrationOverlay'
 import { syncWithCloud } from '../lib/cloudSync'
+import { crossAlert } from '../lib/alert'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { generateDailySummary, generateSchedule, isAIConfigured, parseCourseGoal, generateMorningBriefing, generateWeeklyReview, parseScheduleCommand, type DailySummary, type MorningBriefing, type WeeklyReview } from '../services/ai'
 // Course filtering now done inline with selectedDate
@@ -42,7 +42,6 @@ const HEADER_HEIGHT = 100
 const { height: SCREEN_HEIGHT } = Dimensions.get('window')
 
 const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
-const MONTH_LABELS = ['月', '火', '水', '木', '金', '土', '日']
 
 const getWeekDates = (date: Date): Date[] => {
   const d = new Date(date)
@@ -81,15 +80,6 @@ const priorityColors = {
   high: '#EF4444',
   medium: '#F59E0B',
   low: '#22C55E',
-}
-
-const getGreeting = (): string => {
-  const hour = new Date().getHours()
-  if (hour < 6) return '夜深了'
-  if (hour < 11) return '早上好'
-  if (hour < 14) return '中午好'
-  if (hour < 18) return '下午好'
-  return '晚上好'
 }
 
 // --- Time Picker (for a known task) ---
@@ -269,7 +259,7 @@ const TaskPickerContent = ({
                 </Text>
                 {(task.subtasks?.length || 0) > 0 && (
                   <Text style={[typography.small, { color: theme.textSecondary, marginTop: 2 }]}>
-                    {task.subtasks.filter(s => s.completed).length}/{task.subtasks.length} 子任务
+                    {(task.subtasks ?? []).filter(s => s.completed).length}/{(task.subtasks ?? []).length} 子任务
                   </Text>
                 )}
               </View>
@@ -447,7 +437,7 @@ const TaskDetailContent = ({
             </View>
           </View>
 
-          {task.subtasks.map((sub) => (
+          {(task.subtasks ?? []).map((sub) => (
             <TouchableOpacity
               key={sub.id}
               style={[
@@ -567,7 +557,7 @@ const TodayScreen = () => {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    impactLight()
     try {
       const { user, tasks, timeSlots, projects, habits, setSyncData } = useStore.getState()
       if (user && isSupabaseConfigured()) {
@@ -596,8 +586,6 @@ const TodayScreen = () => {
             cloudData.projects.length === 0 && cloudData.habits.length === 0
           if (!isEmpty) {
             setSyncData(cloudData)
-            console.log('[TodayScreen] 焦点同步完成: tasks=', cloudData.tasks.length,
-              'timeSlots=', cloudData.timeSlots.length)
           }
         })
         .catch((err) => console.error('[TodayScreen] 焦点同步失败:', err))
@@ -667,6 +655,22 @@ const TodayScreen = () => {
     () => tasks.filter((t) => t.dueDate === today && t.status !== 'cancelled'),
     [tasks, today]
   )
+
+  const taskById = useMemo(() => {
+    const map = new Map<string, Task>()
+    tasks.forEach(t => map.set(t.id, t))
+    return map
+  }, [tasks])
+
+  const taskCountByDate = useMemo(() => {
+    const map = new Map<string, number>()
+    tasks.forEach(t => {
+      if (t.status !== 'cancelled') {
+        map.set(t.dueDate, (map.get(t.dueDate) || 0) + 1)
+      }
+    })
+    return map
+  }, [tasks])
   const todaySlots = useMemo(
     () => timeSlots.filter((s) => s.date === today),
     [timeSlots, today]
@@ -740,7 +744,7 @@ const TodayScreen = () => {
 
     if (candidate.startTime + candidate.duration > effectiveEndHour * 60) {
       if (!silent) {
-        Alert.alert('无法安排', '今日剩余时间不足，无法避开所有课程和任务。')
+        crossAlert('无法安排', '今日剩余时间不足，无法避开所有课程和任务。')
       }
       return false
     }
@@ -748,7 +752,15 @@ const TodayScreen = () => {
     addTimeSlot({ taskId, date: today, startTime: candidate.startTime, duration: candidate.duration })
     return true
   }, [addTimeSlot, today, todaySlots, todayCourses, clampSlotToTimeline, effectiveEndHour])
-  const scheduledIds = useMemo(() => new Set(todaySlots.map((s) => s.taskId)), [todaySlots])
+  const scheduledIds = useMemo(() => {
+    const ids = new Set(todaySlots.map((s) => s.taskId))
+    Object.entries(courseGoals).forEach(([key, goals]) => {
+      if (key.endsWith(`_${today}`)) {
+        goals.forEach(g => ids.add(g.taskId))
+      }
+    })
+    return ids
+  }, [todaySlots, courseGoals, today])
   const unscheduledTasks = useMemo(
     () => todayTasks.filter((t) => !scheduledIds.has(t.id) && t.status !== 'completed'),
     [todayTasks, scheduledIds]
@@ -763,7 +775,7 @@ const TodayScreen = () => {
   useEffect(() => {
     if (prevPendingRef.current !== null && prevPendingRef.current > 0 && pendingCount === 0 && todayTasks.length > 0) {
       setShowCelebration(true)
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      notificationSuccess()
     }
     prevPendingRef.current = pendingCount
   }, [pendingCount, todayTasks.length])
@@ -786,13 +798,13 @@ const TodayScreen = () => {
       const taskData = todayTasks.map(t => ({
         title: t.title,
         status: t.status,
-        subtasks: t.subtasks.map(s => ({ title: s.title, completed: s.completed })),
+        subtasks: (t.subtasks ?? []).map(s => ({ title: s.title, completed: s.completed })),
       }))
       const result = await generateDailySummary(taskData, today)
       setAiSummary(result)
       setShowSummary(true)
     } catch (err: any) {
-      Alert.alert('AI 总结失败', err?.message || '请重试')
+      crossAlert('AI 总结失败', err?.message || '请重试')
     }
     setAiSummaryLoading(false)
   }
@@ -831,8 +843,19 @@ const TodayScreen = () => {
       let skipped = 0
       for (const slot of result) {
         if (tasksToSchedule.some(t => t.id === slot.taskId)) {
-          const candidate = clampSlotToTimeline(slot.startTime, slot.duration)
-          if (isTimeSlotOverlapping(occupiedSlots, candidate.startTime, candidate.duration)) {
+          let candidate = clampSlotToTimeline(slot.startTime, slot.duration)
+          let attempts = 0
+          while (attempts < 50 && isTimeSlotOverlapping(occupiedSlots, candidate.startTime, candidate.duration)) {
+            const conflict = occupiedSlots.find(o =>
+              candidate.startTime < o.startTime + o.duration &&
+              candidate.startTime + candidate.duration > o.startTime
+            )
+            if (!conflict) break
+            candidate = clampSlotToTimeline(conflict.startTime + conflict.duration + 5, candidate.duration)
+            attempts++
+          }
+          if (candidate.startTime + candidate.duration > effectiveEndHour * 60 ||
+              isTimeSlotOverlapping(occupiedSlots, candidate.startTime, candidate.duration)) {
             skipped += 1
             continue
           }
@@ -852,10 +875,10 @@ const TodayScreen = () => {
         }
       }
       if (skipped > 0) {
-        Alert.alert('AI 规划提示', `已跳过 ${skipped} 个重叠时间块，请手动微调。`)
+        crossAlert('AI 规划提示', `有 ${skipped} 个任务今日时间不足，请手动调整或改日安排。`)
       }
     } catch (err: any) {
-      Alert.alert('AI 规划失败', err?.message || '请重试')
+      crossAlert('AI 规划失败', err?.message || '请重试')
     }
     setAiScheduling(false)
   }
@@ -890,7 +913,7 @@ const TodayScreen = () => {
     setWeeklyReviewLoading(true)
     try {
       const weekStart = new Date()
-      weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1)
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7))
       const weekTaskData: { date: string; title: string; status: string }[] = []
       for (let i = 0; i < 7; i++) {
         const d = new Date(weekStart)
@@ -911,7 +934,7 @@ const TodayScreen = () => {
       setWeeklyReview(result)
       setShowWeeklyReview(true)
     } catch (err: any) {
-      Alert.alert('周报生成失败', err?.message || '请重试')
+      crossAlert('周报生成失败', err?.message || '请重试')
     }
     setWeeklyReviewLoading(false)
   }
@@ -933,7 +956,7 @@ const TodayScreen = () => {
         if (cmd.action === 'cancel' && cmd.taskId) {
           const slotToRemove = todaySlots.find(s => s.taskId === cmd.taskId)
           if (slotToRemove) removeTimeSlot(slotToRemove.id)
-          Alert.alert('已取消', `已取消「${cmd.taskTitle || '任务'}」的时间安排`)
+          crossAlert('已取消', `已取消「${cmd.taskTitle || '任务'}」的时间安排`)
         } else if (cmd.action === 'reschedule' && cmd.taskId && cmd.newStartTime) {
           const slotToUpdate = todaySlots.find(s => s.taskId === cmd.taskId)
           if (slotToUpdate) {
@@ -942,7 +965,7 @@ const TodayScreen = () => {
           }
           const h = Math.floor(cmd.newStartTime / 60)
           const m = cmd.newStartTime % 60
-          Alert.alert('已改排', `「${cmd.taskTitle || '任务'}」改到 ${h}:${String(m).padStart(2, '0')}`)
+          crossAlert('已改排', `「${cmd.taskTitle || '任务'}」改到 ${h}:${String(m).padStart(2, '0')}`)
         } else if (cmd.action === 'shift' && cmd.shiftMinutes) {
           const slotsToShift = cmd.scope === 'afternoon'
             ? todaySlots.filter(s => s.startTime >= 12 * 60)
@@ -951,7 +974,7 @@ const TodayScreen = () => {
             removeTimeSlot(s.id)
             addTimeSlot({ taskId: s.taskId, date: today, startTime: s.startTime + cmd.shiftMinutes!, duration: s.duration })
           })
-          Alert.alert('已调整', `已将${cmd.scope === 'afternoon' ? '下午' : '所有'}任务${cmd.shiftMinutes > 0 ? '推迟' : '提前'}${Math.abs(cmd.shiftMinutes)}分钟`)
+          crossAlert('已调整', `已将${cmd.scope === 'afternoon' ? '下午' : '所有'}任务${cmd.shiftMinutes > 0 ? '推迟' : '提前'}${Math.abs(cmd.shiftMinutes)}分钟`)
         }
         setCourseGoalInput('')
         setCourseGoalLoading(false)
@@ -967,12 +990,12 @@ const TodayScreen = () => {
         const matchedCourse = todayCourses.find(c => c.id === result.courseId)
         addCourseGoal(result.courseId, today, result.taskId, result.taskTitle)
         setCourseGoalInput('')
-        Alert.alert('已添加', `「${result.taskTitle}」→ ${matchedCourse?.name || '课程'}`)
+        crossAlert('已添加', `「${result.taskTitle}」→ ${matchedCourse?.name || '课程'}`)
       } else {
-        Alert.alert('提示', '今天没有课程或任务可以操作')
+        crossAlert('提示', '今天没有课程或任务可以操作')
       }
     } catch (err: any) {
-      Alert.alert('操作失败', err?.message || '请重试')
+      crossAlert('操作失败', err?.message || '请重试')
     }
     setCourseGoalLoading(false)
   }
@@ -988,13 +1011,13 @@ const TodayScreen = () => {
       onPress: () => removeCourseGoal(course.id, today, i),
     }))
     buttons.push({ text: '取消', style: 'cancel' as const, onPress: () => {} })
-    Alert.alert(`${course.name} - 课程任务`, '选择要删除的任务', buttons)
+    crossAlert(`${course.name} - 课程任务`, '选择要删除的任务', buttons)
   }
 
   const toggleTask = (task: Task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
-    if (newStatus === 'completed') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-    else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    if (newStatus === 'completed') notificationSuccess()
+    else impactLight()
     updateTask(task.id, { status: newStatus })
   }
 
@@ -1047,7 +1070,7 @@ const TodayScreen = () => {
   }
 
   const handleDeleteTask = (task: Task) => {
-    Alert.alert('确认删除', `确定要删除任务「${task.title}」吗？`, [
+    crossAlert('确认删除', `确定要删除任务「${task.title}」吗？`, [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: () => deleteTask(task.id) },
     ])
@@ -1063,7 +1086,7 @@ const TodayScreen = () => {
     dragStartY.current = gestureY
     dragCurrentOffset.current = 0
     dragOffsetY.setValue(0)
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+    impactMedium()
   }
 
   const handleSlotDragMove = (gestureY: number) => {
@@ -1079,7 +1102,7 @@ const TodayScreen = () => {
       const newStart = Math.max(START_HOUR * 60, Math.min(effectiveEndHour * 60 - slot.duration, slot.startTime + minutesDelta))
       removeTimeSlot(slot.id)
       addTimeSlot({ taskId: slot.taskId, date: slot.date, startTime: newStart, duration: slot.duration })
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      notificationSuccess()
     }
     setDraggingSlot(null)
     dragOffsetY.setValue(0)
@@ -1126,7 +1149,7 @@ const TodayScreen = () => {
             )}
 
             {todaySlots.map((slot) => {
-              const task = tasks.find((t) => t.id === slot.taskId)
+              const task = taskById.get(slot.taskId)
               if (!task) return null
               const top = ((slot.startTime - START_HOUR * 60) / 60) * hourHeight
               const height = (slot.duration / 60) * hourHeight
@@ -1264,14 +1287,37 @@ const TodayScreen = () => {
                       ) : null}
                       {hasGoals && (
                         <View style={styles.courseGoalList}>
-                          {goals.map((g, gi) => (
-                            <View key={gi} style={styles.courseGoalItem}>
-                              <Ionicons name="checkbox-outline" size={9} color={course.color} />
-                              <Text style={{ fontSize: 10, color: course.color, flex: 1 }} numberOfLines={1}>
-                                {g.taskTitle}
-                              </Text>
-                            </View>
-                          ))}
+                          {goals.map((g, gi) => {
+                            const goalTask = taskById.get(g.taskId)
+                            const isDone = goalTask?.status === 'completed'
+                            return (
+                              <TouchableOpacity
+                                key={gi}
+                                style={styles.courseGoalItem}
+                                activeOpacity={0.6}
+                                onPress={() => {
+                                  if (goalTask) toggleTask(goalTask)
+                                }}
+                              >
+                                <Ionicons
+                                  name={isDone ? 'checkbox' : 'checkbox-outline'}
+                                  size={11}
+                                  color={isDone ? `${course.color}90` : course.color}
+                                />
+                                <Text
+                                  style={{
+                                    fontSize: 10,
+                                    color: isDone ? `${course.color}70` : course.color,
+                                    flex: 1,
+                                    textDecorationLine: isDone ? 'line-through' : 'none',
+                                  }}
+                                  numberOfLines={1}
+                                >
+                                  {g.taskTitle}
+                                </Text>
+                              </TouchableOpacity>
+                            )
+                          })}
                         </View>
                       )}
                     </>
@@ -1353,8 +1399,7 @@ const TodayScreen = () => {
             const dateStr = format(date, 'yyyy-MM-dd')
             const isSelected = dateStr === today
             const isRealToday = dateStr === actualToday
-            const dayTasks = tasks.filter(t => t.dueDate === dateStr && t.status !== 'cancelled')
-            const hasTasks = dayTasks.length > 0
+            const hasTasks = (taskCountByDate.get(dateStr) || 0) > 0
 
             return (
               <TouchableOpacity

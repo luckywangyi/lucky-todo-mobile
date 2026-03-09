@@ -6,10 +6,10 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Alert,
   ActivityIndicator,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { crossAlert } from '../lib/alert'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import useStore from '../store/useStore'
 import { getTheme } from '../theme/colors'
@@ -111,9 +111,9 @@ const ProjectsScreen = () => {
       setNewIcon('📱')
       setNewColor('#3B82F6')
       setShowCreateModal(false)
-      Alert.alert('AI 规划完成', `已生成 ${plan.phases.length} 个阶段`)
+      crossAlert('AI 规划完成', `已生成 ${plan.phases.length} 个阶段`)
     } catch (err: any) {
-      Alert.alert('AI 规划失败', err?.message || '请重试')
+      crossAlert('AI 规划失败', err?.message || '请重试')
     }
     setAiPlanLoading(false)
   }
@@ -141,7 +141,7 @@ const ProjectsScreen = () => {
   }
 
   const handleDeleteProject = (project: Project) => {
-    Alert.alert('删除项目', `确定删除「${project.title}」？`, [
+    crossAlert('删除项目', `确定删除「${project.title}」？`, [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: () => {
         deleteProject(project.id)
@@ -177,7 +177,7 @@ const ProjectsScreen = () => {
 
   const handleDeletePhase = (phaseId: string) => {
     if (!currentProject) return
-    Alert.alert('删除阶段', '确定删除该阶段？', [
+    crossAlert('删除阶段', '确定删除该阶段？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: () => deleteProjectPhase(currentProject.id, phaseId) },
     ])
@@ -406,7 +406,13 @@ const ProjectsScreen = () => {
       )}
 
       {/* Create project bottom sheet */}
-      <BottomSheet visible={showCreateModal} onClose={() => setShowCreateModal(false)} theme={theme} title="创建项目">
+      <BottomSheet visible={showCreateModal} onClose={() => {
+        setShowCreateModal(false)
+        setNewTitle('')
+        setNewDesc('')
+        setNewIcon('📱')
+        setNewColor('#3B82F6')
+      }} theme={theme} title="创建项目">
         <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 400 }}>
           {/* Icon selection */}
           <Text style={[typography.label, { color: theme.text, marginBottom: 8 }]}>图标</Text>

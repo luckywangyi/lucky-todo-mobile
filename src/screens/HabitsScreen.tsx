@@ -7,9 +7,8 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  Alert,
 } from 'react-native'
-import * as Haptics from 'expo-haptics'
+import { impactLight, notificationSuccess } from '../lib/haptics'
 import { format, startOfWeek, addDays, addWeeks, isToday, isFuture, startOfDay } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { Ionicons } from '@expo/vector-icons'
@@ -20,6 +19,7 @@ import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
 import { isAIConfigured, generateHabitInsights, type HabitInsight } from '../services/ai'
+import { crossAlert } from '../lib/alert'
 
 const habitIcons = ['🌅', '📚', '🏃', '💪', '🧘', '💧', '🍎', '😴', '✍️', '🎯']
 const habitColors = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EC4899']
@@ -48,7 +48,7 @@ const HabitsScreen = () => {
       setHabitInsight(result)
       setShowInsight(true)
     } catch (err: any) {
-      Alert.alert('分析失败', err?.message || '请重试')
+      crossAlert('分析失败', err?.message || '请重试')
     }
     setHabitInsightLoading(false)
   }
@@ -276,8 +276,8 @@ const HabitsScreen = () => {
                       ]}
                       onPress={() => {
                         const wasChecked = habit.records[dateKey]
-                        if (!wasChecked) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-                        else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                        if (!wasChecked) notificationSuccess()
+                        else impactLight()
                         toggleHabitDate(habit.id, dateKey)
                       }}
                     >

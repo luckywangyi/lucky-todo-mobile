@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  Alert,
   Linking,
   TextInput,
   ActivityIndicator,
@@ -24,6 +23,7 @@ import { makeRedirectUri } from 'expo-auth-session'
 import Card from '../components/Card'
 import ProgressRing from '../components/ProgressRing'
 import { getAIConfig, saveAIConfig, testConnection, type AIConfig } from '../services/ai'
+import { crossAlert } from '../lib/alert'
 import {
   saveCookie,
   getCookie,
@@ -157,10 +157,10 @@ const ProfileScreen = () => {
     try {
       await testConnection(aiConfig)
       setAiTestStatus('success')
-      Alert.alert('成功', 'AI 连接测试成功')
+      crossAlert('成功', 'AI 连接测试成功')
     } catch (err: any) {
       setAiTestStatus('error')
-      Alert.alert('连接失败', err?.message || '请检查配置')
+      crossAlert('连接失败', err?.message || '请检查配置')
     }
     setTimeout(() => setAiTestStatus('idle'), 3000)
   }
@@ -194,7 +194,7 @@ const ProfileScreen = () => {
                   null,
                 provider: 'github',
               })
-              Alert.alert('成功', '登录成功！')
+              crossAlert('成功', '登录成功！')
             }
           } catch (err) {
             console.error('处理登录回调失败:', err)
@@ -293,7 +293,7 @@ const ProfileScreen = () => {
   // GitHub login
   const handleGitHubLogin = async () => {
     if (!isSupabaseConfigured() || !supabase) {
-      Alert.alert('提示', '请先配置 Supabase 环境变量')
+      crossAlert('提示', '请先配置 Supabase 环境变量')
       return
     }
     try {
@@ -306,7 +306,7 @@ const ProfileScreen = () => {
         options: { redirectTo: redirectUrl, skipBrowserRedirect: true },
       })
       if (error) {
-        Alert.alert('登录失败', error.message)
+        crossAlert('登录失败', error.message)
         return
       }
       if (data?.url) {
@@ -327,7 +327,7 @@ const ProfileScreen = () => {
                 refresh_token: refreshToken,
               })
             if (sessionError) {
-              Alert.alert('登录失败', sessionError.message)
+              crossAlert('登录失败', sessionError.message)
               return
             }
             if (sessionData.user) {
@@ -341,31 +341,31 @@ const ProfileScreen = () => {
                   null,
                 provider: 'github',
               })
-              Alert.alert('成功', '登录成功！')
+              crossAlert('成功', '登录成功！')
             }
           }
         }
       }
     } catch (error: any) {
       console.error('登录错误:', error)
-      Alert.alert('错误', error.message || '登录失败')
+      crossAlert('错误', error.message || '登录失败')
     }
   }
 
   const handleLogout = async () => {
     await signOut()
     setUser(null)
-    Alert.alert('成功', '已退出登录')
+    crossAlert('成功', '已退出登录')
   }
 
   const runSync = async (showAlert: boolean) => {
     if (syncing) return
     if (!user) {
-      if (showAlert) Alert.alert('提示', '请先登录后再同步')
+      if (showAlert) crossAlert('提示', '请先登录后再同步')
       return
     }
     if (!isSupabaseConfigured() || !supabase) {
-      if (showAlert) Alert.alert('提示', '请先配置 Supabase 环境变量')
+      if (showAlert) crossAlert('提示', '请先配置 Supabase 环境变量')
       return
     }
     try {
@@ -386,24 +386,24 @@ const ProfileScreen = () => {
         tasks.length > 0 || timeSlots.length > 0 || projects.length > 0 || habits.length > 0
       const isEmpty = cc.tasks === 0 && cc.timeSlots === 0 && cc.projects === 0 && cc.habits === 0
       if (isEmpty && hasLocal) {
-        if (showAlert) Alert.alert('提示', '云端没有数据，已保留本地数据')
+        if (showAlert) crossAlert('提示', '云端没有数据，已保留本地数据')
         return
       }
       if (isEmpty) {
-        if (showAlert) Alert.alert('提示', '云端暂无数据，请先在电脑端同步上传')
+        if (showAlert) crossAlert('提示', '云端暂无数据，请先在电脑端同步上传')
         return
       }
       setSyncData(cloudData)
       setLastSyncAt(new Date().toISOString())
       if (showAlert) {
-        Alert.alert(
+        crossAlert(
           '同步完成',
           `任务 ${cc.tasks} · 日程 ${cc.timeSlots} · 项目 ${cc.projects} · 习惯 ${cc.habits}`
         )
       }
     } catch (error: any) {
       console.error('同步失败:', error)
-      if (showAlert) Alert.alert('同步失败', error?.message || '请稍后重试')
+      if (showAlert) crossAlert('同步失败', error?.message || '请稍后重试')
     } finally {
       setSyncing(false)
     }
@@ -414,14 +414,14 @@ const ProfileScreen = () => {
   const handleDownload = async () => {
     if (syncing) return
     if (!user) {
-      Alert.alert('提示', '请先登录后再同步')
+      crossAlert('提示', '请先登录后再同步')
       return
     }
     if (!isSupabaseConfigured() || !supabase) {
-      Alert.alert('提示', '请先配置 Supabase 环境变量')
+      crossAlert('提示', '请先配置 Supabase 环境变量')
       return
     }
-    Alert.alert('确认下载', '这将用云端数据覆盖本地数据，确定继续？', [
+    crossAlert('确认下载', '这将用云端数据覆盖本地数据，确定继续？', [
       { text: '取消', style: 'cancel' },
       {
         text: '确定',
@@ -435,18 +435,18 @@ const ProfileScreen = () => {
               cloudData.projects.length === 0 &&
               cloudData.habits.length === 0
             ) {
-              Alert.alert('提示', '云端暂无数据')
+              crossAlert('提示', '云端暂无数据')
               return
             }
             setSyncData(cloudData)
             setLastSyncAt(new Date().toISOString())
-            Alert.alert(
+            crossAlert(
               '下载完成',
               `任务 ${cloudData.tasks.length} · 日程 ${cloudData.timeSlots.length} · 项目 ${cloudData.projects.length} · 习惯 ${cloudData.habits.length}`
             )
           } catch (error: any) {
             console.error('下载失败:', error)
-            Alert.alert('下载失败', error?.message || '请稍后重试')
+            crossAlert('下载失败', error?.message || '请稍后重试')
           } finally {
             setSyncing(false)
           }
@@ -458,19 +458,19 @@ const ProfileScreen = () => {
   const handleUpload = async () => {
     if (syncing) return
     if (!user) {
-      Alert.alert('提示', '请先登录后再同步')
+      crossAlert('提示', '请先登录后再同步')
       return
     }
     if (!isSupabaseConfigured() || !supabase) {
-      Alert.alert('提示', '请先配置 Supabase 环境变量')
+      crossAlert('提示', '请先配置 Supabase 环境变量')
       return
     }
     const hasLocalData = tasks.length > 0 || projects.length > 0 || habits.length > 0
     if (!hasLocalData) {
-      Alert.alert('提示', '本地没有数据可上传')
+      crossAlert('提示', '本地没有数据可上传')
       return
     }
-    Alert.alert('确认上传', '这将把本地数据上传到云端，确定继续？', [
+    crossAlert('确认上传', '这将把本地数据上传到云端，确定继续？', [
       { text: '取消', style: 'cancel' },
       {
         text: '确定',
@@ -479,13 +479,13 @@ const ProfileScreen = () => {
             setSyncing(true)
             await uploadOnly(user.id, { tasks, timeSlots, projects, habits })
             setLastSyncAt(new Date().toISOString())
-            Alert.alert(
+            crossAlert(
               '上传完成',
               `任务 ${tasks.length} · 日程 ${timeSlots.length} · 项目 ${projects.length} · 习惯 ${habits.length}`
             )
           } catch (error: any) {
             console.error('上传失败:', error)
-            Alert.alert('上传失败', error?.message || '请稍后重试')
+            crossAlert('上传失败', error?.message || '请稍后重试')
           } finally {
             setSyncing(false)
           }
@@ -497,7 +497,7 @@ const ProfileScreen = () => {
   const handleImportCourses = async () => {
     if (courseImporting) return
     if (!hubCookie.trim()) {
-      Alert.alert('提示', '请先粘贴 HUB 系统的 Cookie')
+      crossAlert('提示', '请先粘贴 HUB 系统的 Cookie')
       return
     }
 
@@ -505,7 +505,7 @@ const ProfileScreen = () => {
     if (semesterStartInput.trim()) {
       const dateMatch = semesterStartInput.trim().match(/^\d{4}-\d{2}-\d{2}$/)
       if (!dateMatch) {
-        Alert.alert('格式错误', '日期格式应为 YYYY-MM-DD（如 2025-02-17）')
+        crossAlert('格式错误', '日期格式应为 YYYY-MM-DD（如 2025-02-17）')
         return
       }
     }
@@ -531,16 +531,16 @@ const ProfileScreen = () => {
         setSemesterStart(autoStart)
       }
 
-      Alert.alert('导入成功', `已导入 ${courseList.length} 门课程`)
+      crossAlert('导入成功', `已导入 ${courseList.length} 门课程`)
     } catch (err: any) {
-      Alert.alert('导入失败', err?.message || '请检查 Cookie 是否正确')
+      crossAlert('导入失败', err?.message || '请检查 Cookie 是否正确')
     } finally {
       setCourseImporting(false)
     }
   }
 
   const handleClearCourses = () => {
-    Alert.alert('确认清除', '确定要清除所有课表数据吗？', [
+    crossAlert('确认清除', '确定要清除所有课表数据吗？', [
       { text: '取消', style: 'cancel' },
       {
         text: '清除',
@@ -550,7 +550,7 @@ const ProfileScreen = () => {
           clearCoursesInStore()
           setHubCookie('')
           setSemesterStartInput('')
-          Alert.alert('已清除', '课表数据已清除')
+          crossAlert('已清除', '课表数据已清除')
         },
       },
     ])
@@ -558,11 +558,11 @@ const ProfileScreen = () => {
 
   const handleManualImport = async () => {
     if (!manualJsonInput.trim()) {
-      Alert.alert('提示', '请粘贴 API 响应的 JSON 数据')
+      crossAlert('提示', '请粘贴 API 响应的 JSON 数据')
       return
     }
     if (!semesterStartInput.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(semesterStartInput.trim())) {
-      Alert.alert('提示', '请先填写学期开始日期（如 2025-02-17）')
+      crossAlert('提示', '请先填写学期开始日期（如 2025-02-17）')
       return
     }
     setCourseImporting(true)
@@ -577,9 +577,9 @@ const ProfileScreen = () => {
       setCourses(courseList)
       setManualJsonInput('')
       setShowManualImport(false)
-      Alert.alert('导入成功', `已导入 ${courseList.length} 门课程`)
+      crossAlert('导入成功', `已导入 ${courseList.length} 门课程`)
     } catch (err: any) {
-      Alert.alert('解析失败', err?.message || '请检查 JSON 格式')
+      crossAlert('解析失败', err?.message || '请检查 JSON 格式')
     } finally {
       setCourseImporting(false)
     }
