@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0EA5E9"
+      "backgroundColor": "#7C5CBF"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,7 +20,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0EA5E9"
+        "backgroundColor": "#7C5CBF"
       },
       "package": "com.luckytodo.mobile",
       "edgeToEdgeEnabled": true
@@ -34,7 +34,7 @@
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
-          "color": "#0EA5E9",
+          "color": "#7C5CBF",
           "sounds": [],
           "androidMode": "default",
           "androidCollapsedTitle": "Lucky Todo"

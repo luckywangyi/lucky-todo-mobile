@@ -529,7 +529,7 @@ const TodayScreen = () => {
     removeCourseGoal,
   } = useStore()
   const tabBarHeight = useBottomTabBarHeight()
-  const bottomSafeSpace = tabBarHeight + 12
+  const bottomSafeSpace = Math.max(tabBarHeight, 80) + 12
   const theme = getTheme(themeColor, darkMode)
 
   // Date selection
@@ -616,23 +616,48 @@ const TodayScreen = () => {
     return () => pulse.stop()
   }, [])
 
+  const slideAnim = useRef(new Animated.Value(0)).current
+  const isSwipingRef = useRef(false)
+
   const swipePanResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_evt, gs) =>
-        Math.abs(gs.dx) > 20 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+        !isSwipingRef.current && Math.abs(gs.dx) > 20 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+      onPanResponderGrant: () => {
+        slideAnim.setValue(0)
+      },
+      onPanResponderMove: (_evt, gs) => {
+        slideAnim.setValue(gs.dx)
+      },
       onPanResponderRelease: (_evt, gs) => {
-        if (gs.dx > 50) {
-          setSelectedDate(prev => {
-            const d = new Date(prev)
-            d.setDate(d.getDate() - 1)
-            return d
+        if (gs.dx > 50 || (gs.dx > 0 && gs.vx > 0.5)) {
+          isSwipingRef.current = true
+          Animated.timing(slideAnim, { toValue: SCREEN_WIDTH, duration: 200, useNativeDriver: true }).start(() => {
+            setSelectedDate(prev => {
+              const d = new Date(prev)
+              d.setDate(d.getDate() - 1)
+              return d
+            })
+            slideAnim.setValue(-SCREEN_WIDTH)
+            Animated.timing(slideAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+              isSwipingRef.current = false
+            })
           })
-        } else if (gs.dx < -50) {
-          setSelectedDate(prev => {
-            const d = new Date(prev)
-            d.setDate(d.getDate() + 1)
-            return d
+        } else if (gs.dx < -50 || (gs.dx < 0 && gs.vx < -0.5)) {
+          isSwipingRef.current = true
+          Animated.timing(slideAnim, { toValue: -SCREEN_WIDTH, duration: 200, useNativeDriver: true }).start(() => {
+            setSelectedDate(prev => {
+              const d = new Date(prev)
+              d.setDate(d.getDate() + 1)
+              return d
+            })
+            slideAnim.setValue(SCREEN_WIDTH)
+            Animated.timing(slideAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+              isSwipingRef.current = false
+            })
           })
+        } else {
+          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start()
         }
       },
     })
@@ -666,7 +691,7 @@ const TodayScreen = () => {
     return hasLate ? 23 : DEFAULT_END_HOUR
   }, [todaySlots, todayCourses])
 
-  const TAB_BAR_HEIGHT = 60
+  const TAB_BAR_HEIGHT = Math.max(tabBarHeight, 80)
   const MIN_HOUR_HEIGHT = 38
   const hourHeight = useMemo(() => {
     const available = SCREEN_HEIGHT - HEADER_HEIGHT - TAB_BAR_HEIGHT
@@ -697,16 +722,32 @@ const TodayScreen = () => {
     duration: number,
     silent = false
   ) => {
-    const candidate = clampSlotToTimeline(startTime, duration)
-    if (isTimeSlotOverlapping(todaySlots, candidate.startTime, candidate.duration)) {
+    let candidate = clampSlotToTimeline(startTime, duration)
+
+    const allOccupied = [
+      ...todaySlots.map(s => ({ startTime: s.startTime, duration: s.duration })),
+      ...todayCourses.map(c => ({ startTime: c.startTime, duration: c.duration })),
+    ]
+
+    let attempts = 0
+    while (attempts < 50) {
+      const end = candidate.startTime + candidate.duration
+      const conflict = allOccupied.find(o => candidate.startTime < o.startTime + o.duration && end > o.startTime)
+      if (!conflict) break
+      candidate = clampSlotToTimeline(conflict.startTime + conflict.duration + 5, candidate.duration)
+      attempts++
+    }
+
+    if (candidate.startTime + candidate.duration > effectiveEndHour * 60) {
       if (!silent) {
-        Alert.alert('时间冲突', '该时间段与已有安排重叠，请调整时间后再试。')
+        Alert.alert('无法安排', '今日剩余时间不足，无法避开所有课程和任务。')
       }
       return false
     }
+
     addTimeSlot({ taskId, date: today, startTime: candidate.startTime, duration: candidate.duration })
     return true
-  }, [addTimeSlot, today, todaySlots, clampSlotToTimeline])
+  }, [addTimeSlot, today, todaySlots, todayCourses, clampSlotToTimeline, effectiveEndHour])
   const scheduledIds = useMemo(() => new Set(todaySlots.map((s) => s.taskId)), [todaySlots])
   const unscheduledTasks = useMemo(
     () => todayTasks.filter((t) => !scheduledIds.has(t.id) && t.status !== 'completed'),
@@ -1120,11 +1161,13 @@ const TodayScreen = () => {
                   style={{ flex: 1 }}
                   onPress={() => openTaskDetail(task, slot)}
                   onLongPress={(e) => handleSlotDragStart(slot, e.nativeEvent.pageY)}
-                  onPressOut={() => { if (draggingSlot === slot.id) handleSlotDragEnd(slot) }}
-                  onMoveShouldSetResponder={() => draggingSlot === slot.id}
-                  onResponderMove={(e) => { if (draggingSlot === slot.id) handleSlotDragMove(e.nativeEvent.pageY) }}
-                  onResponderRelease={() => { if (draggingSlot === slot.id) handleSlotDragEnd(slot) }}
-                  activeOpacity={0.7}
+                  onStartShouldSetResponderCapture={() => isDragging}
+                  onMoveShouldSetResponderCapture={() => isDragging}
+                  onMoveShouldSetResponder={() => isDragging}
+                  onResponderMove={(e) => { if (isDragging) handleSlotDragMove(e.nativeEvent.pageY) }}
+                  onResponderRelease={() => { if (isDragging) handleSlotDragEnd(slot) }}
+                  onResponderTerminate={() => { if (isDragging) handleSlotDragEnd(slot) }}
+                  activeOpacity={isDragging ? 1 : 0.7}
                   delayLongPress={400}
                 >
                   {isCompact ? (
@@ -1243,6 +1286,7 @@ const TodayScreen = () => {
       <View style={styles.tlContainer}>
         <ScrollView
           nestedScrollEnabled
+          scrollEnabled={!draggingSlot}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + 8, minHeight: timelineOverflows ? undefined : '100%' }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.primary]} tintColor={theme.primary} />}
@@ -1402,7 +1446,7 @@ const TodayScreen = () => {
         </View>
       )}
 
-      <View style={{ flex: 1 }} {...swipePanResponder.panHandlers}>
+      <Animated.View style={{ flex: 1, transform: [{ translateX: slideAnim }] }} {...swipePanResponder.panHandlers}>
       {viewMode === 'timeline' ? (
         <View style={{ flex: 1 }}>
           {/* Unscheduled tasks at top, before timeline */}
@@ -1473,7 +1517,7 @@ const TodayScreen = () => {
 
           {/* Floating AI buttons — normal flow, sits above tab bar */}
           {aiAvailable && (unscheduledTasks.length > 0 || todayTasks.length > 0) && (
-            <View style={[styles.floatingAiRow, { marginBottom: tabBarHeight + 12 }]}>
+            <View style={[styles.floatingAiRow, { marginBottom: bottomSafeSpace }]}>
               {unscheduledTasks.length > 0 && (
                 <TouchableOpacity
                   style={[styles.floatingAiBtn, { backgroundColor: theme.primary + '15', borderColor: theme.primary + '30' }]}
@@ -1586,7 +1630,7 @@ const TodayScreen = () => {
           )}
         </ScrollView>
       )}
-      </View>
+      </Animated.View>
 
       {/* Time picker for a specific task */}
       <BottomSheet

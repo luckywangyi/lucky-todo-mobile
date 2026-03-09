@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer } from '@react-navigation/native'
 import { AppState, AppStateStatus } from 'react-native'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import TabNavigator from './src/navigation/TabNavigator'
@@ -152,17 +153,19 @@ export default function App() {
   }, [user, tasks, timeSlots, projects, habits, runAutoSync])
 
   return (
-    <NavigationContainer>
-      <StatusBar style={darkMode ? 'light' : 'dark'} backgroundColor={theme.background} />
-      <TabNavigator />
-      <OnboardingOverlay
-        visible={showOnboarding}
-        theme={theme}
-        onDone={() => {
-          setShowOnboarding(false)
-          AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
-        }}
-      />
-    </NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <StatusBar style={darkMode ? 'light' : 'dark'} backgroundColor={theme.background} />
+        <TabNavigator />
+        <OnboardingOverlay
+          visible={showOnboarding}
+          theme={theme}
+          onDone={() => {
+            setShowOnboarding(false)
+            AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
+          }}
+        />
+      </NavigationContainer>
+    </SafeAreaProvider>
   )
 }

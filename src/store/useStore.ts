@@ -419,6 +419,25 @@ const useStore = create<AppState>((set, get) => ({
         try { updates.courseGoals = JSON.parse(courseGoalsJson) } catch { /* ignore */ }
       }
 
+      // ===== MOCK 课表数据（打包前删除） =====
+      if (!updates.courses || (updates.courses as CourseSlot[]).length === 0) {
+        updates.semesterStart = '2026-02-23'
+        updates.courses = [
+          { id: 'mock-1', name: '高等数学', teacher: '张教授', location: '东九楼A201', dayOfWeek: 1, startTime: 8 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#3B82F6' },
+          { id: 'mock-2', name: '大学英语', teacher: '李老师', location: '西十二楼B302', dayOfWeek: 1, startTime: 10 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#8B5CF6' },
+          { id: 'mock-11', name: '程序设计基础', teacher: '周老师', location: '东九楼B201', dayOfWeek: 1, startTime: 14 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#A855F7' },
+          { id: 'mock-3', name: '数据结构', teacher: '王教授', location: '东九楼C105', dayOfWeek: 2, startTime: 8 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#EC4899' },
+          { id: 'mock-4', name: '操作系统', teacher: '赵教授', location: '计算机大楼2048A', dayOfWeek: 2, startTime: 14 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#F97316' },
+          { id: 'mock-5', name: '线性代数', teacher: '刘教授', location: '东九楼A305', dayOfWeek: 3, startTime: 8 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#14B8A6' },
+          { id: 'mock-6', name: '大学物理', teacher: '陈教授', location: '西十二楼A101', dayOfWeek: 3, startTime: 14 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#6366F1' },
+          { id: 'mock-7', name: '高等数学', teacher: '张教授', location: '东九楼A201', dayOfWeek: 4, startTime: 10 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#3B82F6' },
+          { id: 'mock-8', name: '数据结构实验', teacher: '王教授', location: '计算机大楼实验室', dayOfWeek: 4, startTime: 14 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#EF4444' },
+          { id: 'mock-9', name: '操作系统课程设计', teacher: '赵教授', location: '计算机大楼2048A', dayOfWeek: 5, startTime: 18 * 60 + 30, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#F97316' },
+          { id: 'mock-10', name: '体育', teacher: '孙老师', location: '西体育馆', dayOfWeek: 5, startTime: 14 * 60, duration: 100, weeks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], color: '#10B981' },
+        ]
+      }
+      // ===== MOCK 课表数据结束 =====
+
       if (Object.keys(updates).length > 0) {
         set(updates)
         

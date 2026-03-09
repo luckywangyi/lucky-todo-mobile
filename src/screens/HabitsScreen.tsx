@@ -454,14 +454,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   dayCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
   dayNum: {
-    fontSize: 16,
+    fontSize: 13,
   },
   dayDot: {
     width: 5,

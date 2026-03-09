@@ -88,22 +88,21 @@ const TaskCard: React.FC<TaskCardProps> = ({
 
       <Animated.View style={{ transform: [{ translateX }] }} {...panResponder.panHandlers}>
         <TouchableOpacity
-          activeOpacity={0.7}
+          activeOpacity={1}
           style={[
             styles.card,
             {
               backgroundColor: theme.card,
               borderWidth: 1,
               borderColor: theme.border,
-              opacity: isCompleted ? 0.65 : 1,
             },
           ]}
           onPress={() => totalSubtasks > 0 && setExpanded(!expanded)}
           onLongPress={() => onLongPress?.(task)}
           delayLongPress={300}
         >
-          <View style={[styles.priorityBar, { backgroundColor: priorityColors[task.priority] }]} />
-          <View style={styles.content}>
+          <View style={[styles.priorityBar, { backgroundColor: priorityColors[task.priority], opacity: isCompleted ? 0.5 : 1 }]} />
+          <View style={[styles.content, isCompleted && { opacity: 0.6 }]}>
             <View style={styles.headerRow}>
               <Checkbox
                 checked={isCompleted}

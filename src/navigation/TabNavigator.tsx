@@ -1,7 +1,8 @@
 import React from 'react'
-import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native'
+import { View, TouchableOpacity, Text, StyleSheet } from 'react-native'
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import TodayScreen from '../screens/TodayScreen'
 import TasksScreen from '../screens/TasksScreen'
 import ProjectsScreen from '../screens/ProjectsScreen'
@@ -27,9 +28,10 @@ const tabConfig: {
 const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarProps) => {
   const { themeColor, darkMode } = useStore()
   const theme = getTheme(themeColor, darkMode)
+  const insets = useSafeAreaInsets()
 
   return (
-    <View style={[styles.tabBarOuter, { backgroundColor: theme.background }]}>
+    <View style={[styles.tabBarOuter, { backgroundColor: theme.background, paddingBottom: Math.max(insets.bottom, 12) }]}>
       <View
         style={[
           styles.tabBar,
@@ -108,7 +110,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 12,
     paddingTop: 6,
   },
   tabBar: {

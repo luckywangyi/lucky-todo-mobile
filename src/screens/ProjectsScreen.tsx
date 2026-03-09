@@ -97,7 +97,11 @@ const ProjectsScreen = () => {
             title: phase.title,
             description: phase.description,
             status: 'pending',
-            tasks: phase.tasks.map((t, i) => ({ id: `ai-${i}-${Date.now()}`, title: t.title, completed: false })),
+            tasks: phase.tasks.map((t: any, i: number) => ({
+              id: `ai-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              title: typeof t === 'string' ? t : (t.title || t.name || t.task || JSON.stringify(t)),
+              completed: false,
+            })),
           })
         }
         setSelectedProject(created)

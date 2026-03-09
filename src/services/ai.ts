@@ -123,7 +123,11 @@ export async function generateSubtasks(
 
   const reply = await chatCompletion(messages)
   const parsed = JSON.parse(extractJSON(reply))
-  return Array.isArray(parsed) ? parsed : []
+  if (!Array.isArray(parsed)) return []
+  return parsed.map((t: any) => ({
+    title: typeof t === 'string' ? t : (t.title || t.name || ''),
+    estimatedMinutes: t.estimatedMinutes || t.estimated_minutes || undefined,
+  })).filter((t: any) => t.title)
 }
 
 // ---- 每日总结 ----
@@ -529,23 +533,31 @@ export async function generateProjectPlan(
     {
       role: 'system',
       content: `你是一个项目规划助手。根据项目标题和描述，生成合理的项目阶段和任务。
-返回纯 JSON：
+严格按以下 JSON 格式返回（注意 tasks 中必须用 "title" 字段）：
 {
   "phases": [
     {
       "title": "阶段名称",
       "description": "阶段描述",
-      "tasks": [{ "title": "任务名称" }]
+      "tasks": [{ "title": "具体任务名称" }, { "title": "另一个任务" }]
     }
   ]
 }
-生成 3-6 个阶段，每个阶段 2-5 个任务。只返回 JSON。`,
+要求：生成 3-6 个阶段，每个阶段 2-5 个任务。任务要具体可执行。只返回纯 JSON，不要多余文字。`,
     },
     { role: 'user', content: `项目标题：${title}\n描述：${description || '无'}` },
   ]
 
   const reply = await chatCompletion(messages)
-  return JSON.parse(extractJSON(reply)) as GeneratedProjectPlan
+  const raw = JSON.parse(extractJSON(reply))
+  const phases = (raw.phases || []).map((p: any) => ({
+    title: p.title || p.name || '',
+    description: p.description || '',
+    tasks: (p.tasks || []).map((t: any) => ({
+      title: typeof t === 'string' ? t : (t.title || t.name || t.task || ''),
+    })).filter((t: any) => t.title),
+  }))
+  return { phases } as GeneratedProjectPlan
 }
 
 // ---- AI 习惯分析 ----
