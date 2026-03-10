@@ -26,6 +26,9 @@ export interface Task {
   estimatedMinutes?: number
   originalDueDate?: string
   postponeCount?: number
+  projectId?: string
+  phaseId?: string
+  projectTaskId?: string
   createdAt: string
   updatedAt: string
   deletedAt?: string

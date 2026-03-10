@@ -1,16 +1,10 @@
 import React, { useState } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { ThemeColors } from '../theme/colors'
+import { ThemeColors, TASK_TITLE_COLOR } from '../theme/colors'
 import { Task } from '../types'
 import Checkbox from './Checkbox'
 import { typography } from '../theme/typography'
-
-const priorityColors = {
-  high: '#EF4444',
-  medium: '#F59E0B',
-  low: '#10B981',
-}
 
 interface TaskCardProps {
   task: Task
@@ -20,6 +14,7 @@ interface TaskCardProps {
   onToggleSubtask?: (taskId: string, subtaskId: string) => void
   onLongPress?: (task: Task) => void
   hint?: string
+  projectColor?: string
 }
 
 const TaskCard: React.FC<TaskCardProps> = ({
@@ -30,6 +25,7 @@ const TaskCard: React.FC<TaskCardProps> = ({
   onToggleSubtask,
   onLongPress,
   hint,
+  projectColor,
 }) => {
   const [expanded, setExpanded] = useState(false)
   const isCompleted = task.status === 'completed'
@@ -54,7 +50,6 @@ const TaskCard: React.FC<TaskCardProps> = ({
         onLongPress={() => onLongPress?.(task)}
         delayLongPress={300}
       >
-        <View style={[styles.priorityBar, { backgroundColor: priorityColors[task.priority], opacity: isCompleted ? 0.5 : 1 }]} />
         <View style={[styles.content, isCompleted && { opacity: 0.6 }]}>
           <View style={styles.headerRow}>
             <Checkbox
@@ -63,10 +58,18 @@ const TaskCard: React.FC<TaskCardProps> = ({
               theme={theme}
             />
             <View style={styles.info}>
+              {projectColor && !isCompleted && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 3 }}>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: projectColor }} />
+                  <Text style={[typography.small, { color: projectColor, fontWeight: '500' }]} numberOfLines={1}>
+                    {task.description || '项目任务'}
+                  </Text>
+                </View>
+              )}
               <Text
                 style={[
                   typography.bodyMedium,
-                  { color: theme.text },
+                  { color: TASK_TITLE_COLOR },
                   isCompleted && styles.titleCompleted,
                 ]}
                 numberOfLines={2}
@@ -174,11 +177,6 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 16,
     overflow: 'hidden',
-    flexDirection: 'row',
-  },
-  priorityBar: {
-    width: 3,
-    alignSelf: 'stretch',
   },
   content: {
     flex: 1,

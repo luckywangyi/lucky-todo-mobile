@@ -9,7 +9,9 @@
     "newArchEnabled": true,
     "scheme": "lucky-todo-mobile",
     "splash": {
-      "backgroundColor": "#F5F5F5"
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
     },
     "ios": {
       "supportsTablet": true,

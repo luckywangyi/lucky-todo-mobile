@@ -2,11 +2,14 @@ import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer } from '@react-navigation/native'
 import { AppState, AppStateStatus, Platform } from 'react-native'
+import * as SplashScreen from 'expo-splash-screen'
+
+SplashScreen.preventAutoHideAsync()
 
 if (Platform.OS === 'web' && !document.getElementById('lucky-todo-global-style')) {
   const style = document.createElement('style')
   style.id = 'lucky-todo-global-style'
-  style.textContent = 'input,textarea,select,button,div,a{outline:none!important;-webkit-tap-highlight-color:transparent}'
+  style.textContent = '*,*:focus,*:focus-visible,*:focus-within,*:active,*:hover{outline:none!important;outline-width:0!important;outline-style:none!important;-webkit-tap-highlight-color:transparent!important;box-shadow:none!important}[data-focusable]{outline:none!important}'
   document.head.appendChild(style)
 }
 import { SafeAreaProvider } from 'react-native-safe-area-context'
@@ -69,6 +72,7 @@ export default function App() {
       await loadData()
       initialLoadDone.current = true
       await AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
+      await SplashScreen.hideAsync()
     }
     init()
 

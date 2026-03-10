@@ -9,16 +9,16 @@ import {
   ActivityIndicator,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { impactLight, notificationSuccess } from '../lib/haptics'
 import { crossAlert } from '../lib/alert'
 import useStore from '../store/useStore'
-import { getTheme } from '../theme/colors'
+import { getTheme, ThemeColors, TASK_TITLE_COLOR } from '../theme/colors'
 import { typography } from '../theme/typography'
-import { Project, ProjectPhase } from '../types'
-import Card from '../components/Card'
+import { Project, ProjectPhase, TaskStatus } from '../types'
 import EmptyState from '../components/EmptyState'
 import BottomSheet from '../components/BottomSheet'
 import { isAIConfigured, generateProjectPlan } from '../services/ai'
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const projectColors = [
   { id: 'blue', color: '#3B82F6' },
@@ -31,6 +31,23 @@ const projectColors = [
 
 const projectIcons = ['📱', '🎮', '📚', '💻', '🎨', '🎵', '💪', '✈️', '🏠', '💼', '🧪', '🌱']
 
+const statusLabels: Record<string, string> = {
+  pending: '待开始',
+  in_progress: '进行中',
+  completed: '已完成',
+}
+const statusColors = (theme: ThemeColors) => ({
+  pending: theme.textSecondary,
+  in_progress: theme.primary,
+  completed: theme.success,
+})
+
+const nextStatus = (s: TaskStatus): TaskStatus => {
+  if (s === 'pending') return 'in_progress'
+  if (s === 'in_progress') return 'completed'
+  return 'pending'
+}
+
 const getProjectProgress = (project: Project) => {
   if (project.phases.length === 0) return 0
   const totalTasks = project.phases.reduce((sum, p) => sum + p.tasks.length, 0)
@@ -38,6 +55,11 @@ const getProjectProgress = (project: Project) => {
   return totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
 }
 
+const getProjectTaskCounts = (project: Project) => {
+  const total = project.phases.reduce((s, p) => s + p.tasks.length, 0)
+  const completed = project.phases.reduce((s, p) => s + p.tasks.filter(t => t.completed).length, 0)
+  return { total, completed }
+}
 
 const getPhaseProgress = (phase: ProjectPhase) => {
   if (phase.tasks.length === 0) return phase.status === 'completed' ? 100 : 0
@@ -45,15 +67,98 @@ const getPhaseProgress = (phase: ProjectPhase) => {
   return Math.round((completed / phase.tasks.length) * 100)
 }
 
+// --- Circular Progress Component ---
+const CircularProgress = ({ size, progress, color, trackColor, textSize, showText = true }: {
+  size: number; progress: number; color: string; trackColor: string; textSize?: number; showText?: boolean
+}) => {
+  const strokeWidth = Math.max(3, size * 0.1)
+  const radius = (size - strokeWidth) / 2
+  const clampedProgress = Math.min(100, Math.max(0, progress))
+
+  // We build the circle with 4 quadrant clips for pure View rendering
+  const renderHalf = (isRight: boolean) => {
+    const rotation = isRight
+      ? Math.min(clampedProgress, 50) * 3.6
+      : Math.max(0, clampedProgress - 50) * 3.6
+
+    if ((isRight && clampedProgress <= 0) || (!isRight && clampedProgress <= 50)) {
+      return null
+    }
+
+    return (
+      <View style={{
+        position: 'absolute',
+        width: size / 2,
+        height: size,
+        left: isRight ? size / 2 : 0,
+        overflow: 'hidden',
+      }}>
+        <View style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: strokeWidth,
+          borderColor: color,
+          position: 'absolute',
+          left: isRight ? -size / 2 : 0,
+          transform: [{ rotate: `${isRight ? rotation - 180 : rotation}deg` }],
+          borderTopColor: isRight ? color : 'transparent',
+          borderRightColor: isRight ? color : 'transparent',
+          borderBottomColor: isRight ? 'transparent' : color,
+          borderLeftColor: isRight ? 'transparent' : color,
+        }} />
+      </View>
+    )
+  }
+
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{
+        width: size, height: size, borderRadius: size / 2,
+        borderWidth: strokeWidth, borderColor: trackColor,
+        position: 'absolute',
+      }} />
+      {renderHalf(true)}
+      {renderHalf(false)}
+      {showText && (
+        <Text style={{ fontSize: textSize || size * 0.28, fontWeight: '700', color }}>
+          {clampedProgress}%
+        </Text>
+      )}
+    </View>
+  )
+}
+
+// --- Status Badge Component ---
+const StatusBadge = ({ status, color, onPress }: {
+  status: TaskStatus; color: string; onPress?: () => void
+}) => {
+  const Wrapper = onPress ? TouchableOpacity : View
+  return (
+    <Wrapper
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[styles.statusBadge, { backgroundColor: color + '18' }]}
+    >
+      <View style={[styles.statusDot, { backgroundColor: color }]} />
+      <Text style={[typography.small, { color, fontWeight: '600' }]}>
+        {statusLabels[status] || status}
+      </Text>
+    </Wrapper>
+  )
+}
+
 const ProjectsScreen = () => {
   const {
-    projects, themeColor, darkMode,
+    projects, tasks, themeColor, darkMode,
     addProject, updateProject, deleteProject,
     addProjectPhase, updateProjectPhase, deleteProjectPhase,
-    toggleProjectTask,
+    toggleProjectTask, promoteProjectTask,
   } = useStore()
   const theme = getTheme(themeColor, darkMode)
-  const tabBarHeight = useBottomTabBarHeight()
+  const insets = useSafeAreaInsets()
+  const tabBarHeight = 64 + Math.max(insets.bottom, 12)
+  const sColors = statusColors(theme)
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -72,6 +177,15 @@ const ProjectsScreen = () => {
   const [aiAvailable, setAiAvailable] = useState(false)
   const [aiPlanLoading, setAiPlanLoading] = useState(false)
   useEffect(() => { isAIConfigured().then(setAiAvailable) }, [])
+
+  // Track which project tasks are already linked to daily tasks
+  const linkedProjectTaskIds = useMemo(() => {
+    const set = new Set<string>()
+    tasks.forEach(t => {
+      if (t.projectTaskId && !t.deletedAt) set.add(t.projectTaskId)
+    })
+    return set
+  }, [tasks])
 
   const handleAIGeneratePlan = async () => {
     if (!newTitle.trim() || aiPlanLoading) return
@@ -103,11 +217,7 @@ const ProjectsScreen = () => {
         }
         setSelectedProject(created)
       }
-      setNewTitle('')
-      setNewDesc('')
-      setNewIcon('📱')
-      setNewColor('#3B82F6')
-      setShowCreateModal(false)
+      resetCreateForm()
       crossAlert('AI 规划完成', `已生成 ${plan.phases.length} 个阶段`)
     } catch (err: any) {
       crossAlert('AI 规划失败', err?.message || '请重试')
@@ -120,6 +230,14 @@ const ProjectsScreen = () => {
     return projects.find(p => p.id === selectedProject.id) || null
   }, [selectedProject, projects])
 
+  const resetCreateForm = () => {
+    setNewTitle('')
+    setNewDesc('')
+    setNewIcon('📱')
+    setNewColor('#3B82F6')
+    setShowCreateModal(false)
+  }
+
   const handleCreateProject = () => {
     if (!newTitle.trim()) return
     addProject({
@@ -130,11 +248,7 @@ const ProjectsScreen = () => {
       phases: [],
       status: 'pending',
     })
-    setNewTitle('')
-    setNewDesc('')
-    setNewIcon('📱')
-    setNewColor('#3B82F6')
-    setShowCreateModal(false)
+    resetCreateForm()
   }
 
   const handleDeleteProject = (project: Project) => {
@@ -180,100 +294,191 @@ const ProjectsScreen = () => {
     ])
   }
 
-  // Project detail view
+  const handleTogglePhaseStatus = (phaseId: string, currentStatus: TaskStatus) => {
+    if (!currentProject) return
+    impactLight()
+    updateProjectPhase(currentProject.id, phaseId, { status: nextStatus(currentStatus) })
+  }
+
+  const handlePromoteTask = (phaseId: string, taskId: string) => {
+    if (!currentProject) return
+    const result = promoteProjectTask(currentProject.id, phaseId, taskId)
+    if (result) {
+      notificationSuccess()
+      crossAlert('已添加到日程', '任务已添加到今日待办，可在时间轴中安排')
+    }
+  }
+
+  // Sort: active projects first, completed last
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((a, b) => {
+      const pa = getProjectProgress(a)
+      const pb = getProjectProgress(b)
+      if (pa === 100 && pb !== 100) return 1
+      if (pa !== 100 && pb === 100) return -1
+      return 0
+    })
+  }, [projects])
+
+  const stats = useMemo(() => {
+    const active = projects.filter(p => {
+      const prog = getProjectProgress(p)
+      return prog > 0 && prog < 100
+    }).length
+    const done = projects.filter(p => getProjectProgress(p) === 100).length
+    return { total: projects.length, active, done }
+  }, [projects])
+
+  // ===================== PROJECT DETAIL VIEW =====================
   if (currentProject) {
     const progress = getProjectProgress(currentProject)
+    const { total: totalTasks, completed: completedTasks } = getProjectTaskCounts(currentProject)
+
     return (
       <View style={[styles.container, { backgroundColor: theme.background }]}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={[styles.backBtn, { backgroundColor: theme.surfaceSecondary }]}
-            onPress={() => setSelectedProject(null)}
-          >
-            <Ionicons name="chevron-back" size={22} color={theme.text} />
-          </TouchableOpacity>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[typography.heading2, { color: theme.text }]}>
-              {currentProject.icon} {currentProject.title}
-            </Text>
-            {currentProject.description ? (
-              <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 2 }]} numberOfLines={1}>
-                {currentProject.description}
+        {/* Gradient header */}
+        <View style={[styles.detailHeader, { backgroundColor: currentProject.color + '12' }]}>
+          <View style={styles.detailHeaderTop}>
+            <TouchableOpacity
+              style={[styles.backBtn, { backgroundColor: theme.card }]}
+              onPress={() => setSelectedProject(null)}
+            >
+              <Ionicons name="chevron-back" size={22} color={theme.text} />
+            </TouchableOpacity>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={[typography.heading2, { color: theme.text }]}>
+                {currentProject.icon} {currentProject.title}
               </Text>
-            ) : null}
+              {currentProject.description ? (
+                <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 2 }]} numberOfLines={1}>
+                  {currentProject.description}
+                </Text>
+              ) : null}
+            </View>
+            <CircularProgress
+              size={48}
+              progress={progress}
+              color={currentProject.color}
+              trackColor={theme.surfaceSecondary}
+            />
+          </View>
+          <View style={styles.detailStats}>
+            <Text style={[typography.caption, { color: theme.textSecondary }]}>
+              {completedTasks}/{totalTasks} 任务完成 · {currentProject.phases.length} 个阶段
+            </Text>
+            <StatusBadge
+              status={progress === 100 ? 'completed' : progress > 0 ? 'in_progress' : 'pending'}
+              color={progress === 100 ? theme.success : progress > 0 ? currentProject.color : theme.textSecondary}
+            />
           </View>
         </View>
 
-        {/* Progress bar */}
-        <View style={styles.progressSection}>
-          <View style={styles.progressRow}>
-            <Text style={[typography.label, { color: theme.text }]}>进度</Text>
-            <Text style={[typography.label, { color: currentProject.color }]}>{progress}%</Text>
-          </View>
-          <View style={[styles.progressBarBg, { backgroundColor: theme.surfaceSecondary }]}>
-            <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: currentProject.color }]} />
-          </View>
-        </View>
-
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100 }}>
-          {currentProject.phases.map((phase) => {
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 100 }}>
+          {/* Timeline phases */}
+          {currentProject.phases.map((phase, index) => {
             const pProgress = getPhaseProgress(phase)
+            const isLast = index === currentProject.phases.length - 1
+            const phaseColor = sColors[phase.status] || theme.textSecondary
+
             return (
-              <Card key={phase.id} theme={theme} style={{ marginBottom: 12 }}>
-                <View style={styles.phaseHeader}>
-                  <View style={{ flex: 1 }}>
-                    <View style={styles.phaseTitle}>
-                      <View style={[styles.phaseDot, { backgroundColor: currentProject.color }]} />
-                      <Text style={[typography.bodyMedium, { color: theme.text, flex: 1 }]}>{phase.title}</Text>
-                      <Text style={[typography.caption, { color: theme.textSecondary }]}>
-                        {pProgress}%
-                      </Text>
-                    </View>
-                    {phase.description ? (
-                      <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 4, marginLeft: 16 }]}>
-                        {phase.description}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <TouchableOpacity onPress={() => handleDeletePhase(phase.id)} style={{ padding: 4 }}>
-                    <Ionicons name="trash-outline" size={16} color={theme.error} />
-                  </TouchableOpacity>
+              <View key={phase.id} style={styles.timelineRow}>
+                {/* Left timeline */}
+                <View style={styles.timelineLeft}>
+                  <View style={[
+                    styles.timelineDot,
+                    { backgroundColor: phaseColor, borderColor: phaseColor + '30' },
+                  ]} />
+                  {!isLast && (
+                    <View style={[styles.timelineLine, { backgroundColor: theme.border }]} />
+                  )}
                 </View>
 
-                <View style={[styles.phaseProgressBg, { backgroundColor: theme.surfaceSecondary, marginTop: 8 }]}>
-                  <View style={[styles.phaseProgressFill, { width: `${pProgress}%`, backgroundColor: currentProject.color + '80' }]} />
-                </View>
-
-                {phase.tasks.map(task => (
-                  <TouchableOpacity
-                    key={task.id}
-                    style={styles.taskRow}
-                    onPress={() => toggleProjectTask(currentProject.id, phase.id, task.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={task.completed ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={20}
-                      color={task.completed ? theme.success : theme.textSecondary}
-                    />
-                    <Text style={[
-                      typography.body,
-                      { color: task.completed ? theme.textSecondary : theme.text, marginLeft: 10, flex: 1 },
-                      task.completed && { textDecorationLine: 'line-through' },
-                    ]}>
-                      {task.title}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-
+                {/* Right content card */}
                 <TouchableOpacity
-                  style={[styles.addTaskBtn, { borderColor: theme.border }]}
-                  onPress={() => { setShowAddTask(phase.id); setTaskTitle('') }}
+                  style={[styles.phaseCard, {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                    ...theme.cardShadow,
+                  }]}
+                  activeOpacity={0.9}
+                  onLongPress={() => {
+                    impactLight()
+                    handleDeletePhase(phase.id)
+                  }}
                 >
-                  <Ionicons name="add" size={16} color={theme.primary} />
-                  <Text style={[typography.caption, { color: theme.primary, marginLeft: 4 }]}>添加任务</Text>
+                  <View style={styles.phaseCardHeader}>
+                    <Text style={[typography.bodyMedium, { color: theme.text, flex: 1 }]}>{phase.title}</Text>
+                    <StatusBadge
+                      status={phase.status}
+                      color={phaseColor}
+                      onPress={() => handleTogglePhaseStatus(phase.id, phase.status)}
+                    />
+                  </View>
+
+                  {phase.description ? (
+                    <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 4 }]} numberOfLines={2}>
+                      {phase.description}
+                    </Text>
+                  ) : null}
+
+                  {/* Phase progress thin bar */}
+                  <View style={[styles.thinProgressBg, { backgroundColor: theme.surfaceSecondary, marginTop: 10 }]}>
+                    <View style={[styles.thinProgressFill, {
+                      width: `${pProgress}%`,
+                      backgroundColor: phaseColor,
+                    }]} />
+                  </View>
+
+                  {/* Tasks */}
+                  {phase.tasks.map(task => {
+                    const isLinked = linkedProjectTaskIds.has(task.id)
+                    return (
+                      <View key={task.id} style={styles.taskRow}>
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                          onPress={() => {
+                            impactLight()
+                            toggleProjectTask(currentProject.id, phase.id, task.id)
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons
+                            name={task.completed ? 'checkmark-circle' : 'ellipse-outline'}
+                            size={20}
+                            color={task.completed ? theme.success : theme.textSecondary}
+                          />
+                          <Text style={[
+                            typography.body,
+                            { color: task.completed ? theme.textSecondary : TASK_TITLE_COLOR, marginLeft: 10, flex: 1 },
+                            task.completed && { textDecorationLine: 'line-through' as const },
+                          ]} numberOfLines={2}>
+                            {task.title}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => handlePromoteTask(phase.id, task.id)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={{ paddingLeft: 8 }}
+                        >
+                          <Ionicons
+                            name={isLinked ? 'calendar' : 'calendar-outline'}
+                            size={18}
+                            color={isLinked ? currentProject.color : theme.textSecondary + '80'}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    )
+                  })}
+
+                  <TouchableOpacity
+                    style={[styles.addTaskBtn, { borderColor: theme.border }]}
+                    onPress={() => { setShowAddTask(phase.id); setTaskTitle('') }}
+                  >
+                    <Ionicons name="add" size={16} color={theme.primary} />
+                    <Text style={[typography.caption, { color: theme.primary, marginLeft: 4 }]}>添加任务</Text>
+                  </TouchableOpacity>
                 </TouchableOpacity>
-              </Card>
+              </View>
             )
           })}
 
@@ -287,7 +492,7 @@ const ProjectsScreen = () => {
         </ScrollView>
 
         <TouchableOpacity
-          style={[styles.fab, { backgroundColor: currentProject.color, bottom: tabBarHeight + 16 }]}
+          style={[styles.fab, { backgroundColor: currentProject.color, bottom: tabBarHeight + 24 }]}
           onPress={() => { setShowAddPhase(true); setPhaseTitle(''); setPhaseDesc('') }}
         >
           <Ionicons name="add" size={28} color="#fff" />
@@ -342,14 +547,14 @@ const ProjectsScreen = () => {
     )
   }
 
-  // Project list view
+  // ===================== PROJECT LIST VIEW =====================
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={styles.header}>
         <View>
           <Text style={[typography.heading1, { color: theme.text }]}>项目</Text>
           <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 4 }]}>
-            {projects.length} 个项目
+            管理你的长期目标
           </Text>
         </View>
         <TouchableOpacity
@@ -371,92 +576,124 @@ const ProjectsScreen = () => {
         />
       ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }}>
-          {projects.map(project => {
+          {/* Stats bar */}
+          <View style={styles.statsRow}>
+            {[
+              { label: '进行中', value: stats.active, color: theme.primary },
+              { label: '已完成', value: stats.done, color: theme.success },
+              { label: '共计', value: stats.total, color: theme.textSecondary },
+            ].map(item => (
+              <View key={item.label} style={[styles.statCard, { backgroundColor: item.color + '0D' }]}>
+                <Text style={[typography.heading3, { color: item.color }]}>{item.value}</Text>
+                <Text style={[typography.small, { color: item.color, marginTop: 2 }]}>{item.label}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Project cards */}
+          {sortedProjects.map(project => {
             const progress = getProjectProgress(project)
-            const totalTasks = project.phases.reduce((s, p) => s + p.tasks.length, 0)
-            const completedTasks = project.phases.reduce((s, p) => s + p.tasks.filter(t => t.completed).length, 0)
+            const { total, completed } = getProjectTaskCounts(project)
+            const isDone = progress === 100
 
             return (
               <TouchableOpacity
                 key={project.id}
                 activeOpacity={0.7}
                 onPress={() => setSelectedProject(project)}
+                onLongPress={() => {
+                  impactLight()
+                  handleDeleteProject(project)
+                }}
+                style={{ opacity: isDone ? 0.6 : 1, marginBottom: 12 }}
               >
-                <Card theme={theme}>
-                  <View style={styles.projectCardHeader}>
-                    <View style={[styles.projectIcon, { backgroundColor: project.color + '18' }]}>
-                      <Text style={{ fontSize: 24 }}>{project.icon}</Text>
+                <View style={[styles.projectCard, {
+                  backgroundColor: theme.card,
+                  borderColor: theme.border,
+                  ...theme.cardShadow,
+                }]}>
+                  <View style={styles.projectCardContent}>
+                    <View style={[styles.projectIcon, { backgroundColor: project.color + '15' }]}>
+                      <Text style={{ fontSize: 26 }}>{project.icon}</Text>
                     </View>
+
                     <View style={{ flex: 1, marginLeft: 14 }}>
                       <Text style={[typography.bodyMedium, { color: theme.text }]}>{project.title}</Text>
-                      <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 3 }]}>
-                        {project.phases.length} 个阶段 · {completedTasks}/{totalTasks} 任务完成
-                      </Text>
+                      {project.description ? (
+                        <Text style={[typography.caption, { color: theme.textSecondary, marginTop: 2 }]} numberOfLines={1}>
+                          {project.description}
+                        </Text>
+                      ) : null}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
+                        <StatusBadge
+                          status={isDone ? 'completed' : progress > 0 ? 'in_progress' : 'pending'}
+                          color={isDone ? theme.success : progress > 0 ? project.color : theme.textSecondary}
+                        />
+                        <Text style={[typography.small, { color: theme.textSecondary }]}>
+                          {completed}/{total} 任务
+                        </Text>
+                      </View>
                     </View>
-                    <Text style={[typography.label, { color: project.color, fontSize: 15, marginRight: 8 }]}>{progress}%</Text>
-                    <TouchableOpacity
-                      onPress={() => handleDeleteProject(project)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      style={{ padding: 4 }}
-                    >
-                      <Ionicons name="trash-outline" size={18} color={theme.error} />
-                    </TouchableOpacity>
-                  </View>
 
-                  <View style={[styles.progressBarBg, { backgroundColor: theme.surfaceSecondary, marginTop: 14 }]}>
-                    <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: project.color }]} />
+                    <CircularProgress
+                      size={44}
+                      progress={progress}
+                      color={project.color}
+                      trackColor={theme.surfaceSecondary}
+                      textSize={12}
+                    />
                   </View>
-                </Card>
+                </View>
               </TouchableOpacity>
             )
           })}
         </ScrollView>
       )}
 
-      <BottomSheet visible={showCreateModal} onClose={() => {
-        setShowCreateModal(false)
-        setNewTitle('')
-        setNewDesc('')
-        setNewIcon('📱')
-        setNewColor('#3B82F6')
-      }} theme={theme} title="创建项目">
-        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 400 }}>
-          <Text style={[typography.label, { color: theme.text, marginBottom: 8 }]}>图标</Text>
+      {/* Create Project Modal */}
+      <BottomSheet visible={showCreateModal} onClose={resetCreateForm} theme={theme} title="创建项目">
+        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+          <Text style={[typography.label, { color: theme.text, marginBottom: 10 }]}>选择图标</Text>
           <View style={styles.iconGrid}>
-            {projectIcons.map(icon => (
-              <TouchableOpacity
-                key={icon}
-                style={[
-                  styles.iconBtn,
-                  { backgroundColor: newIcon === icon ? newColor + '18' : theme.surfaceSecondary },
-                  newIcon === icon && { borderColor: newColor, borderWidth: 2 },
-                ]}
-                onPress={() => setNewIcon(icon)}
-              >
-                <Text style={{ fontSize: 22 }}>{icon}</Text>
-              </TouchableOpacity>
-            ))}
+            {projectIcons.map(icon => {
+              const selected = newIcon === icon
+              return (
+                <TouchableOpacity
+                  key={icon}
+                  style={[
+                    styles.iconBtn,
+                    { backgroundColor: selected ? newColor + '18' : theme.surfaceSecondary },
+                    selected && { borderColor: newColor, borderWidth: 2, transform: [{ scale: 1.1 }] },
+                  ]}
+                  onPress={() => setNewIcon(icon)}
+                >
+                  <Text style={{ fontSize: 22 }}>{icon}</Text>
+                </TouchableOpacity>
+              )
+            })}
           </View>
 
-          <Text style={[typography.label, { color: theme.text, marginTop: 16, marginBottom: 8 }]}>颜色</Text>
+          <Text style={[typography.label, { color: theme.text, marginTop: 18, marginBottom: 10 }]}>选择颜色</Text>
           <View style={styles.colorRow}>
-            {projectColors.map(c => (
-              <TouchableOpacity
-                key={c.id}
-                style={[
-                  styles.colorBtn,
-                  { backgroundColor: c.color },
-                  newColor === c.color && { borderWidth: 3, borderColor: theme.text },
-                ]}
-                onPress={() => setNewColor(c.color)}
-              >
-                {newColor === c.color && <Ionicons name="checkmark" size={16} color="white" />}
-              </TouchableOpacity>
-            ))}
+            {projectColors.map(c => {
+              const selected = newColor === c.color
+              return (
+                <TouchableOpacity key={c.id} onPress={() => setNewColor(c.color)}>
+                  <View style={[
+                    styles.colorOuter,
+                    { borderColor: selected ? c.color : 'transparent' },
+                  ]}>
+                    <View style={[styles.colorInner, { backgroundColor: c.color }]}>
+                      {selected && <Ionicons name="checkmark" size={14} color="white" />}
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
           </View>
 
           <TextInput
-            style={[styles.input, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border, color: theme.text, marginTop: 16 }]}
+            style={[styles.input, { backgroundColor: theme.surfaceSecondary, borderColor: theme.border, color: theme.text, marginTop: 18 }]}
             placeholder="项目名称"
             placeholderTextColor={theme.textSecondary}
             value={newTitle}
@@ -482,16 +719,20 @@ const ProjectsScreen = () => {
             </TouchableOpacity>
             {aiAvailable && (
               <TouchableOpacity
-                style={[styles.submitBtn, { backgroundColor: theme.primary, flex: 1, opacity: newTitle.trim() ? 1 : 0.5 }]}
+                style={[styles.aiBtn, {
+                  borderColor: theme.primary,
+                  flex: 1,
+                  opacity: newTitle.trim() ? 1 : 0.5,
+                }]}
                 onPress={handleAIGeneratePlan}
                 disabled={!newTitle.trim() || aiPlanLoading}
               >
                 {aiPlanLoading ? (
-                  <ActivityIndicator size={14} color="#fff" />
+                  <ActivityIndicator size={14} color={theme.primary} />
                 ) : (
                   <>
-                    <Ionicons name="sparkles" size={16} color="#fff" />
-                    <Text style={styles.submitBtnText}>AI 规划</Text>
+                    <Ionicons name="sparkles" size={16} color={theme.primary} />
+                    <Text style={[styles.submitBtnText, { color: theme.primary }]}>AI 规划</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -532,64 +773,123 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  projectCardHeader: {
+
+  // Stats
+  statsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+  },
+  statCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+
+  // Project card
+  projectCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  projectCardContent: {
     flexDirection: 'row',
     alignItems: 'center',
+    padding: 14,
   },
   projectIcon: {
-    width: 48,
-    height: 48,
+    width: 50,
+    height: 50,
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  progressSection: {
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-  },
-  progressRow: {
+
+  // Status badge
+  statusBadge: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    gap: 4,
   },
-  progressBarBg: {
+  statusDot: {
+    width: 6,
     height: 6,
     borderRadius: 3,
-    overflow: 'hidden',
   },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 3,
+
+  // Detail header
+  detailHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 56,
+    paddingBottom: 16,
   },
-  phaseHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  phaseTitle: {
+  detailHeaderTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
-  phaseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  detailStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingLeft: 52,
   },
-  phaseProgressBg: {
+
+  // Timeline
+  timelineRow: {
+    flexDirection: 'row',
+    paddingRight: 20,
+  },
+  timelineLeft: {
+    width: 44,
+    alignItems: 'center',
+    paddingTop: 20,
+  },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    zIndex: 1,
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    marginTop: -1,
+  },
+
+  // Phase card
+  phaseCard: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 12,
+  },
+  phaseCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  thinProgressBg: {
     height: 3,
     borderRadius: 2,
     overflow: 'hidden',
   },
-  phaseProgressFill: {
+  thinProgressFill: {
     height: '100%',
     borderRadius: 2,
   },
+
   taskRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,
-    paddingLeft: 16,
   },
   addTaskBtn: {
     flexDirection: 'row',
@@ -613,6 +913,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 6,
   },
+
+  // Create modal
   iconGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -629,10 +931,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
   },
-  colorBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  colorOuter: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colorInner: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -655,6 +965,16 @@ const styles = StyleSheet.create({
     gap: 8,
     borderRadius: 14,
     paddingVertical: 15,
+  },
+  aiBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 14,
+    paddingVertical: 15,
+    borderWidth: 1.5,
+    backgroundColor: 'transparent',
   },
   submitBtnText: {
     color: 'white',

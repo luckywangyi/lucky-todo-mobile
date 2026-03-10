@@ -1,0 +1,16 @@
+---
+description: 移动端优先开发约束 — 本项目最终运行在 Android/iOS 手机端
+alwaysApply: true
+---
+
+# 移动端优先
+
+本项目是 React Native (Expo) 手机应用，最终运行平台为 Android 和 iOS。Web 预览仅用于开发调试，不是目标平台。
+
+## 核心约束
+
+- UI、动画、交互方案必须基于 React Native 原生 API（Animated、PanResponder、LayoutAnimation 等）
+- 禁止使用仅 Web 可用的方案（CSS transition、CSS animation、DOM API、window/document 操作等）作为功能的主实现
+- 如需 Web 兼容（开发预览），用 `Platform.OS === 'web'` 分支处理，但核心逻辑必须优先保证手机端可用
+- 测试和验证以手机端实际表现为准，Web 上的视觉差异可接受
+- 选择第三方库时优先考虑 React Native 生态兼容性

@@ -13,6 +13,52 @@ interface ChatMessage {
 
 const AI_CONFIG_KEY = 'lucky-todo-ai-config'
 
+export interface AIPreset {
+  id: string
+  name: string
+  endpoint: string
+  model: string
+  placeholder: string
+}
+
+export const AI_PRESETS: AIPreset[] = [
+  {
+    id: 'dashscope',
+    name: '阿里百炼',
+    endpoint: 'https://dashscope.aliyuncs.com/compatible-mode',
+    model: 'qwen-plus',
+    placeholder: 'sk-...',
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    endpoint: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
+    placeholder: 'sk-...',
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor 反代',
+    endpoint: '',
+    model: 'claude-3-5-sonnet-20241022',
+    placeholder: '反代提供的 Key',
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    endpoint: 'https://api.openai.com',
+    model: 'gpt-4o-mini',
+    placeholder: 'sk-...',
+  },
+  {
+    id: 'custom',
+    name: '自定义',
+    endpoint: '',
+    model: '',
+    placeholder: 'API Key',
+  },
+]
+
 export const getAIConfig = async (): Promise<AIConfig> => {
   try {
     const raw = await AsyncStorage.getItem(AI_CONFIG_KEY)

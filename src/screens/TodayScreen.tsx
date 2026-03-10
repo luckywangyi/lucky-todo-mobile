@@ -12,6 +12,7 @@ import {
   TextInput,
   PanResponder,
   RefreshControl,
+  Platform,
 } from 'react-native'
 import { impactLight, impactMedium, notificationSuccess } from '../lib/haptics'
 import { format } from 'date-fns'
@@ -20,7 +21,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs'
 import useStore from '../store/useStore'
-import { getTheme } from '../theme/colors'
+import { getTheme, TASK_TITLE_COLOR } from '../theme/colors'
 import { typography } from '../theme/typography'
 import { Task, TimeSlot, CourseSlot } from '../types'
 import TaskCard from '../components/TaskCard'
@@ -76,307 +77,6 @@ const isTimeSlotOverlapping = (
   })
 }
 
-const priorityColors = {
-  high: '#EF4444',
-  medium: '#F59E0B',
-  low: '#22C55E',
-}
-
-// --- Time Picker (for a known task) ---
-const TimePickerContent = ({
-  task,
-  onConfirm,
-  theme,
-  initialHour,
-  initialMinute,
-}: {
-  task: Task
-  onConfirm: (startTime: number, duration: number) => void
-  theme: ReturnType<typeof getTheme>
-  initialHour?: number
-  initialMinute?: number
-}) => {
-  const [selectedHour, setSelectedHour] = useState(initialHour ?? 9)
-  const [selectedMinute, setSelectedMinute] = useState(initialMinute ?? 0)
-  const [duration, setDuration] = useState(60)
-
-  const hours = Array.from({ length: 23 - START_HOUR + 1 }, (_, i) => START_HOUR + i)
-  const minutes = [0, 15, 30, 45]
-  const durations = [15, 30, 45, 60, 90, 120, 180]
-  const endTime = selectedHour * 60 + selectedMinute + duration
-
-  return (
-    <View>
-      <Text style={[typography.bodyMedium, { color: theme.text, marginBottom: 16 }]} numberOfLines={2}>
-        {task.title}
-      </Text>
-
-      <View style={[styles.previewBar, { backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border }]}>
-        <Ionicons name="time-outline" size={16} color={theme.primary} />
-        <Text style={[typography.label, { color: theme.text }]}>
-          {formatTime(selectedHour * 60 + selectedMinute)} - {formatTime(endTime)}
-          {'  '}
-          {duration >= 60 ? `${duration / 60}小时` : `${duration}分钟`}
-        </Text>
-      </View>
-
-      <Text style={[typography.label, { color: theme.textSecondary, marginBottom: 10, marginTop: 20 }]}>
-        开始时间
-      </Text>
-      <View style={styles.timePickerRow}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
-          {hours.map((h) => (
-            <TouchableOpacity
-              key={h}
-              style={[
-                styles.pickerChip,
-                {
-                  backgroundColor: selectedHour === h ? theme.primary : theme.card,
-                  borderWidth: 1,
-                  borderColor: selectedHour === h ? theme.primary : theme.border,
-                },
-              ]}
-              onPress={() => setSelectedHour(h)}
-            >
-              <Text
-                style={[styles.pickerChipText, { color: selectedHour === h ? 'white' : theme.text }]}
-              >
-                {h.toString().padStart(2, '0')}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-        <Text style={[styles.timeSep, { color: theme.text }]}>:</Text>
-        <View style={{ flexDirection: 'row' }}>
-          {minutes.map((m) => (
-            <TouchableOpacity
-              key={m}
-              style={[
-                styles.pickerChip,
-                {
-                  backgroundColor: selectedMinute === m ? theme.primary : theme.card,
-                  borderWidth: 1,
-                  borderColor: selectedMinute === m ? theme.primary : theme.border,
-                },
-              ]}
-              onPress={() => setSelectedMinute(m)}
-            >
-              <Text
-                style={[styles.pickerChipText, { color: selectedMinute === m ? 'white' : theme.text }]}
-              >
-                {m.toString().padStart(2, '0')}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      <Text style={[typography.label, { color: theme.textSecondary, marginBottom: 10, marginTop: 20 }]}>
-        时长
-      </Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {durations.map((d) => (
-          <TouchableOpacity
-            key={d}
-            style={[
-              styles.durationChip,
-              {
-                backgroundColor: duration === d ? theme.primary : theme.card,
-                borderWidth: 1,
-                borderColor: duration === d ? theme.primary : theme.border,
-              },
-            ]}
-            onPress={() => setDuration(d)}
-          >
-            <Text style={[styles.durationChipText, { color: duration === d ? 'white' : theme.text }]}>
-              {d >= 60 ? `${d / 60}小时` : `${d}分钟`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      <TouchableOpacity
-        style={[styles.confirmBtn, { backgroundColor: theme.primary }]}
-        onPress={() => onConfirm(selectedHour * 60 + selectedMinute, duration)}
-      >
-        <Ionicons name="checkmark" size={20} color="white" />
-        <Text style={styles.confirmBtnText}>确认安排</Text>
-      </TouchableOpacity>
-    </View>
-  )
-}
-
-// --- Task Picker (tap timeline → pick task + time) ---
-const TaskPickerContent = ({
-  tasks,
-  theme,
-  initialHour,
-  initialMinute,
-  onPick,
-}: {
-  tasks: Task[]
-  theme: ReturnType<typeof getTheme>
-  initialHour: number
-  initialMinute: number
-  onPick: (task: Task, startTime: number, duration: number) => void
-}) => {
-  const [step, setStep] = useState<'pick' | 'time'>('pick')
-  const [pickedTask, setPickedTask] = useState<Task | null>(null)
-  const [selectedHour, setSelectedHour] = useState(initialHour)
-  const [selectedMinute, setSelectedMinute] = useState(initialMinute)
-  const [duration, setDuration] = useState(60)
-
-  const hours = Array.from({ length: 23 - START_HOUR + 1 }, (_, i) => START_HOUR + i)
-  const minutes = [0, 15, 30, 45]
-  const durations = [15, 30, 45, 60, 90, 120, 180]
-  const endTime = selectedHour * 60 + selectedMinute + duration
-
-  if (step === 'pick') {
-    return (
-      <View>
-        <Text style={[typography.label, { color: theme.textSecondary, marginBottom: 4 }]}>
-          安排到 {formatTime(initialHour * 60 + initialMinute)}
-        </Text>
-        <Text style={[typography.label, { color: theme.textSecondary, marginBottom: 16 }]}>
-          选择一个任务
-        </Text>
-        <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
-          {tasks.map((task) => (
-            <TouchableOpacity
-              key={task.id}
-              style={[styles.taskPickItem, { backgroundColor: theme.card, borderColor: theme.border }]}
-              onPress={() => {
-                setPickedTask(task)
-                setDuration(60)
-                setStep('time')
-              }}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.taskPickDot, { backgroundColor: priorityColors[task.priority] }]} />
-              <View style={{ flex: 1 }}>
-                <Text style={[typography.bodyMedium, { color: theme.text }]} numberOfLines={1}>
-                  {task.title}
-                </Text>
-                {(task.subtasks?.length || 0) > 0 && (
-                  <Text style={[typography.small, { color: theme.textSecondary, marginTop: 2 }]}>
-                    {(task.subtasks ?? []).filter(s => s.completed).length}/{(task.subtasks ?? []).length} 子任务
-                  </Text>
-                )}
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-    )
-  }
-
-  return (
-    <View>
-      <TouchableOpacity
-        style={styles.backBtn}
-        onPress={() => setStep('pick')}
-      >
-        <Ionicons name="chevron-back" size={18} color={theme.primary} />
-        <Text style={[typography.label, { color: theme.primary }]}>返回选择</Text>
-      </TouchableOpacity>
-
-      <Text style={[typography.bodyMedium, { color: theme.text, marginBottom: 16 }]} numberOfLines={2}>
-        {pickedTask?.title}
-      </Text>
-
-      <View style={[styles.previewBar, { backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border }]}>
-        <Ionicons name="time-outline" size={16} color={theme.primary} />
-        <Text style={[typography.label, { color: theme.text }]}>
-          {formatTime(selectedHour * 60 + selectedMinute)} - {formatTime(endTime)}
-          {'  '}
-          {duration >= 60 ? `${duration / 60}小时` : `${duration}分钟`}
-        </Text>
-      </View>
-
-      <Text style={[typography.label, { color: theme.textSecondary, marginBottom: 10, marginTop: 20 }]}>
-        开始时间
-      </Text>
-      <View style={styles.timePickerRow}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
-          {hours.map((h) => (
-            <TouchableOpacity
-              key={h}
-              style={[
-                styles.pickerChip,
-                {
-                  backgroundColor: selectedHour === h ? theme.primary : theme.card,
-                  borderWidth: 1,
-                  borderColor: selectedHour === h ? theme.primary : theme.border,
-                },
-              ]}
-              onPress={() => setSelectedHour(h)}
-            >
-              <Text style={[styles.pickerChipText, { color: selectedHour === h ? 'white' : theme.text }]}>
-                {h.toString().padStart(2, '0')}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-        <Text style={[styles.timeSep, { color: theme.text }]}>:</Text>
-        <View style={{ flexDirection: 'row' }}>
-          {minutes.map((m) => (
-            <TouchableOpacity
-              key={m}
-              style={[
-                styles.pickerChip,
-                {
-                  backgroundColor: selectedMinute === m ? theme.primary : theme.card,
-                  borderWidth: 1,
-                  borderColor: selectedMinute === m ? theme.primary : theme.border,
-                },
-              ]}
-              onPress={() => setSelectedMinute(m)}
-            >
-              <Text style={[styles.pickerChipText, { color: selectedMinute === m ? 'white' : theme.text }]}>
-                {m.toString().padStart(2, '0')}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      <Text style={[typography.label, { color: theme.textSecondary, marginBottom: 10, marginTop: 20 }]}>
-        时长
-      </Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {durations.map((d) => (
-          <TouchableOpacity
-            key={d}
-            style={[
-              styles.durationChip,
-              {
-                backgroundColor: duration === d ? theme.primary : theme.card,
-                borderWidth: 1,
-                borderColor: duration === d ? theme.primary : theme.border,
-              },
-            ]}
-            onPress={() => setDuration(d)}
-          >
-            <Text style={[styles.durationChipText, { color: duration === d ? 'white' : theme.text }]}>
-              {d >= 60 ? `${d / 60}小时` : `${d}分钟`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      <TouchableOpacity
-        style={[styles.confirmBtn, { backgroundColor: theme.primary }]}
-        onPress={() => {
-          if (pickedTask) onPick(pickedTask, selectedHour * 60 + selectedMinute, duration)
-        }}
-      >
-        <Ionicons name="checkmark" size={20} color="white" />
-        <Text style={styles.confirmBtnText}>确认安排</Text>
-      </TouchableOpacity>
-    </View>
-  )
-}
 
 // --- Task Detail Sheet (view subtasks, toggle, complete) ---
 const TaskDetailContent = ({
@@ -399,7 +99,6 @@ const TaskDetailContent = ({
   const isDone = task.status === 'completed'
   const totalSubs = task.subtasks?.length || 0
   const doneSubs = task.subtasks?.filter(s => s.completed).length || 0
-  const pColor = priorityColors[task.priority]
 
   return (
     <View>
@@ -412,8 +111,7 @@ const TaskDetailContent = ({
       </View>
 
       <View style={detailStyles.titleRow}>
-        <View style={[detailStyles.priorityDot, { backgroundColor: pColor }]} />
-        <Text style={[typography.heading3 || typography.bodyMedium, { color: theme.text, flex: 1, fontSize: 17, fontWeight: '600' }]}>
+        <Text style={[typography.heading3 || typography.bodyMedium, { color: TASK_TITLE_COLOR, flex: 1, fontSize: 17, fontWeight: '600' }]}>
           {task.title}
         </Text>
       </View>
@@ -505,11 +203,13 @@ const TodayScreen = () => {
     tasks,
     timeSlots,
     habits,
+    projects,
     themeColor,
     darkMode,
     updateTask,
     deleteTask,
     addTimeSlot,
+    updateTimeSlot,
     removeTimeSlot,
     toggleSubtask,
     courses,
@@ -540,16 +240,11 @@ const TodayScreen = () => {
     return week >= 1 && week <= 25 ? week : null
   }, [semesterStart, selectedDate])
 
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-  const [showTimePicker, setShowTimePicker] = useState(false)
-  const [showTaskPicker, setShowTaskPicker] = useState(false)
   const [showTaskDetail, setShowTaskDetail] = useState(false)
   const [detailTask, setDetailTask] = useState<Task | null>(null)
   const [detailSlot, setDetailSlot] = useState<TimeSlot | null>(null)
   const [viewMode, setViewMode] = useState<'timeline' | 'list'>('timeline')
   const [showCompleted, setShowCompleted] = useState(false)
-  const [prefillHour, setPrefillHour] = useState(9)
-  const [prefillMinute, setPrefillMinute] = useState(0)
   const [unschedExpanded, setUnschedExpanded] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showCelebration, setShowCelebration] = useState(false)
@@ -609,9 +304,12 @@ const TodayScreen = () => {
 
   const swipePanResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_evt, gs) =>
-        !isSwipingRef.current && Math.abs(gs.dx) > 20 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+      onMoveShouldSetPanResponder: (_evt, gs) => {
+        if (draggingTaskRef.current) return false
+        return !isSwipingRef.current && Math.abs(gs.dx) > 20 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5
+      },
       onPanResponderGrant: () => {
+        if (draggingTaskRef.current) return
         slideAnim.setValue(0)
       },
       onPanResponderMove: (_evt, gs) => {
@@ -661,6 +359,12 @@ const TodayScreen = () => {
     tasks.forEach(t => map.set(t.id, t))
     return map
   }, [tasks])
+
+  const projectColorMap = useMemo(() => {
+    const map = new Map<string, string>()
+    projects.forEach(p => map.set(p.id, p.color))
+    return map
+  }, [projects])
 
   const taskCountByDate = useMemo(() => {
     const map = new Map<string, number>()
@@ -820,7 +524,7 @@ const TodayScreen = () => {
         id: t.id,
         title: t.title,
         priority: t.priority,
-        estimatedMinutes: t.estimatedMinutes || 60,
+        estimatedMinutes: t.estimatedMinutes || 45,
       }))
       const courseOccupied = todayCourses.map(c => ({
         startTime: c.startTime,
@@ -1021,44 +725,6 @@ const TodayScreen = () => {
     updateTask(task.id, { status: newStatus })
   }
 
-  const openTimePickerForTask = (task: Task, hour?: number, minute?: number) => {
-    if (task.status === 'completed') return
-    setPrefillHour(hour ?? Math.max(START_HOUR, new Date().getHours()))
-    setPrefillMinute(minute ?? 0)
-    setSelectedTask(task)
-    setShowTimePicker(true)
-  }
-
-  const handleSchedule = (startTime: number, duration: number) => {
-    if (!selectedTask) return
-    const added = scheduleSlot(selectedTask.id, startTime, duration)
-    if (added) {
-      setSelectedTask(null)
-      setShowTimePicker(false)
-    }
-  }
-
-  const handleTaskPickSchedule = (task: Task, startTime: number, duration: number) => {
-    const added = scheduleSlot(task.id, startTime, duration)
-    if (added) setShowTaskPicker(false)
-  }
-
-  const handleTimelineTap = (event: { nativeEvent: { locationY: number } }) => {
-    if (unscheduledTasks.length === 0) return
-    const y = event.nativeEvent.locationY
-    const rawMinutes = (y / hourHeight) * 60 + START_HOUR * 60
-    const snapped = Math.round(rawMinutes / 15) * 15
-    const clamped = Math.max(START_HOUR * 60, Math.min(effectiveEndHour * 60, snapped))
-    setPrefillHour(Math.floor(clamped / 60))
-    setPrefillMinute(clamped % 60)
-
-    if (unscheduledTasks.length === 1) {
-      openTimePickerForTask(unscheduledTasks[0], Math.floor(clamped / 60), clamped % 60)
-    } else {
-      setShowTaskPicker(true)
-    }
-  }
-
   const openTaskDetail = (task: Task, slot: TimeSlot) => {
     setDetailTask(task)
     setDetailSlot(slot)
@@ -1076,52 +742,216 @@ const TodayScreen = () => {
     ])
   }
 
-  const [draggingSlot, setDraggingSlot] = useState<string | null>(null)
-  const dragOffsetY = useRef(new Animated.Value(0)).current
-  const dragStartY = useRef(0)
-  const dragCurrentOffset = useRef(0)
+  // Drag-to-timeline state
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [draggingTask, setDraggingTask] = useState<Task | null>(null)
+  const draggingTaskRef = useRef<Task | null>(null)
+  const draggingSlotRef = useRef<TimeSlot | null>(null)
+  const dragPositionRef = useRef({ x: 0, y: 0 })
+  const [dragXY, setDragXY] = useState({ x: 0, y: 0 })
+  const timelineRef = useRef<View>(null)
+  const timelineLayoutRef = useRef({ pageY: 0, height: 0 })
+  const [snapMinutes, setSnapMinutes] = useState<number | null>(null)
+  const snapMinutesRef = useRef<number | null>(null)
+  const webListenerCleanupRef = useRef<(() => void) | null>(null)
+  const handleDragEndRef = useRef<(() => void)>(() => {})
+  const tapActiveRef = useRef(false)
+  const tlScrollViewRef = useRef<ScrollView>(null)
+  const scrollYRef = useRef(0)
+  const contentHeightRef = useRef(0)
+  const containerHeightRef = useRef(0)
+  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const handleSlotDragStart = (slot: TimeSlot, gestureY: number) => {
-    setDraggingSlot(slot.id)
-    dragStartY.current = gestureY
-    dragCurrentOffset.current = 0
-    dragOffsetY.setValue(0)
-    impactMedium()
-  }
+  const measureTimeline = useCallback(() => {
+    timelineRef.current?.measureInWindow((_x, y, _w, height) => {
+      if (height > 0) {
+        timelineLayoutRef.current = { pageY: y, height }
+      }
+    })
+  }, [])
 
-  const handleSlotDragMove = (gestureY: number) => {
-    const offset = gestureY - dragStartY.current
-    dragCurrentOffset.current = offset
-    dragOffsetY.setValue(offset)
-  }
+  const computeSnap = useCallback((pageY: number) => {
+    const tl = timelineLayoutRef.current
+    if (tl.height === 0) return null
+    const relY = pageY - tl.pageY
+    const rawMinutes = (relY / hourHeight) * 60 + START_HOUR * 60
+    const snapped = Math.round(rawMinutes / 15) * 15
+    return Math.max(START_HOUR * 60, Math.min(snapped, (effectiveEndHour - 1) * 60 + 45))
+  }, [hourHeight, effectiveEndHour])
 
-  const handleSlotDragEnd = (slot: TimeSlot) => {
-    const offset = dragCurrentOffset.current
-    const minutesDelta = Math.round((offset / hourHeight) * 60 / 15) * 15
-    if (Math.abs(minutesDelta) >= 15) {
-      const newStart = Math.max(START_HOUR * 60, Math.min(effectiveEndHour * 60 - slot.duration, slot.startTime + minutesDelta))
-      removeTimeSlot(slot.id)
-      addTimeSlot({ taskId: slot.taskId, date: slot.date, startTime: newStart, duration: slot.duration })
-      notificationSuccess()
+  const computeSnapRef = useRef(computeSnap)
+  computeSnapRef.current = computeSnap
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollTimerRef.current) {
+      clearInterval(autoScrollTimerRef.current)
+      autoScrollTimerRef.current = null
     }
-    setDraggingSlot(null)
-    dragOffsetY.setValue(0)
-  }
+  }, [])
+
+  const startAutoScroll = useCallback(() => {
+    stopAutoScroll()
+    const windowH = Dimensions.get('window').height
+    const TOP_EDGE = 200
+    const BOTTOM_EDGE = windowH - 180
+    const MAX_SPEED = 6
+    autoScrollTimerRef.current = setInterval(() => {
+      if (!draggingTaskRef.current) { stopAutoScroll(); return }
+      const touchY = dragPositionRef.current.y
+      let speed = 0
+      if (touchY < TOP_EDGE && scrollYRef.current > 0) {
+        speed = -Math.min(MAX_SPEED, Math.max(1, (TOP_EDGE - touchY) / 10))
+      } else if (touchY > BOTTOM_EDGE) {
+        speed = Math.min(MAX_SPEED, Math.max(1, (touchY - BOTTOM_EDGE) / 10))
+      }
+      if (speed !== 0) {
+        const maxScroll = Math.max(0, contentHeightRef.current - containerHeightRef.current)
+        const newY = Math.max(0, Math.min(scrollYRef.current + speed, maxScroll))
+        if (Math.abs(newY - scrollYRef.current) < 0.5) return
+        tlScrollViewRef.current?.scrollTo({ y: newY, animated: false })
+        scrollYRef.current = newY
+        measureTimeline()
+        const snap = computeSnapRef.current(touchY)
+        snapMinutesRef.current = snap
+        setSnapMinutes(snap)
+      }
+    }, 16)
+  }, [stopAutoScroll, measureTimeline])
+
+  const handleDragStart = useCallback((task: Task, pageX: number, pageY: number, slot?: TimeSlot) => {
+    tapActiveRef.current = false
+    measureTimeline()
+    draggingTaskRef.current = task
+    draggingSlotRef.current = slot || null
+    setDraggingTask(task)
+    dragPositionRef.current = { x: pageX, y: pageY }
+    setDragXY({ x: pageX, y: pageY })
+    const snap = computeSnap(pageY)
+    snapMinutesRef.current = snap
+    setSnapMinutes(snap)
+    impactMedium()
+    if (Platform.OS === 'web') {
+      const onMove = (e: any) => {
+        e.preventDefault()
+        const x = e.touches ? e.touches[0].pageX : e.pageX
+        const y = e.touches ? e.touches[0].pageY : e.pageY
+        dragPositionRef.current = { x, y }
+        setDragXY({ x, y })
+        const snap = computeSnapRef.current(y)
+        snapMinutesRef.current = snap
+        setSnapMinutes(snap)
+      }
+      const onEnd = (e: any) => {
+        e.preventDefault()
+        handleDragEndRef.current()
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onEnd)
+      document.addEventListener('touchmove', onMove, { passive: false } as any)
+      document.addEventListener('touchend', onEnd)
+      webListenerCleanupRef.current = () => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onEnd)
+        document.removeEventListener('touchmove', onMove)
+        document.removeEventListener('touchend', onEnd)
+        webListenerCleanupRef.current = null
+      }
+    }
+    startAutoScroll()
+  }, [measureTimeline, computeSnap, startAutoScroll])
+
+  const handleDragMove = useCallback((pageX: number, pageY: number) => {
+    dragPositionRef.current = { x: pageX, y: pageY }
+    setDragXY({ x: pageX, y: pageY })
+    const snap = computeSnap(pageY)
+    snapMinutesRef.current = snap
+    setSnapMinutes(snap)
+  }, [computeSnap])
+
+  const handleDragEnd = useCallback(() => {
+    const task = draggingTaskRef.current
+    const snap = snapMinutesRef.current
+    const existingSlot = draggingSlotRef.current
+    if (task && snap !== null) {
+      const targetCourse = todayCourses.find(c =>
+        snap >= c.startTime && snap < c.startTime + c.duration
+      )
+
+      if (targetCourse) {
+        if (existingSlot) removeTimeSlot(existingSlot.id)
+        addCourseGoal(targetCourse.id, today, task.id, task.title)
+        notificationSuccess()
+        crossAlert('已添加到课程', `「${task.title}」→ ${targetCourse.name}`)
+      } else if (existingSlot) {
+        const duration = existingSlot.duration
+        let finalStart = snap
+
+        const courseConflict = todayCourses.find(c =>
+          finalStart < c.startTime + c.duration && finalStart + duration > c.startTime
+        )
+        if (courseConflict) {
+          finalStart = Math.round((courseConflict.startTime + courseConflict.duration + 5) / 15) * 15
+        }
+
+        const courseOccupied = todayCourses.map(c => ({ start: c.startTime, end: c.startTime + c.duration }))
+        const otherSlots = todaySlots.filter(s => s.id !== existingSlot.id)
+        const movedEnd = finalStart + duration
+        const conflicting = otherSlots.filter(s =>
+          finalStart < s.startTime + s.duration && movedEnd > s.startTime
+        )
+
+        for (const cs of conflicting) {
+          let pushTo = Math.round((movedEnd + 5) / 15) * 15
+          let tries = 0
+          while (tries < 20) {
+            const csEnd = pushTo + cs.duration
+            const cc = courseOccupied.find(c => pushTo < c.end && csEnd > c.start)
+            if (!cc) break
+            pushTo = Math.round((cc.end + 5) / 15) * 15
+            tries++
+          }
+          if (pushTo + cs.duration <= effectiveEndHour * 60) {
+            updateTimeSlot(cs.id, { startTime: pushTo })
+          }
+        }
+
+        removeTimeSlot(existingSlot.id)
+        addTimeSlot({ taskId: task.id, date: today, startTime: finalStart, duration })
+        notificationSuccess()
+      } else {
+        const duration = task.estimatedMinutes || 45
+        const added = scheduleSlot(task.id, snap, duration)
+        if (added) notificationSuccess()
+      }
+    }
+    stopAutoScroll()
+    draggingTaskRef.current = null
+    draggingSlotRef.current = null
+    snapMinutesRef.current = null
+    setDraggingTask(null)
+    setSnapMinutes(null)
+    if (webListenerCleanupRef.current) webListenerCleanupRef.current()
+  }, [scheduleSlot, removeTimeSlot, addTimeSlot, updateTimeSlot, addCourseGoal, today, todaySlots, todayCourses, effectiveEndHour, stopAutoScroll])
+
+  handleDragEndRef.current = handleDragEnd
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+      if (webListenerCleanupRef.current) webListenerCleanupRef.current()
+      stopAutoScroll()
+    }
+  }, [stopAutoScroll])
 
   const renderTimeline = () => {
     const hours = Array.from({ length: effectiveEndHour - START_HOUR + 1 }, (_, i) => START_HOUR + i)
     const now = new Date()
     const currentMinutes = now.getHours() * 60 + now.getMinutes()
-    const hasUnscheduled = unscheduledTasks.length > 0
-
     const timelineHeight = (effectiveEndHour - START_HOUR) * hourHeight + 12
 
     const timelineContent = (
-          <TouchableOpacity
-            activeOpacity={hasUnscheduled ? 0.95 : 1}
-            onPress={hasUnscheduled ? handleTimelineTap : undefined}
-            style={{ height: timelineHeight, position: 'relative' }}
-          >
+        <View ref={timelineRef} onLayout={measureTimeline}>
+          <View style={{ height: timelineHeight, position: 'relative' }}>
             {hours.map((hour) => (
               <View key={hour} style={[styles.hourRow, { top: (hour - START_HOUR) * hourHeight }]}>
                 <Text style={[styles.hourLabel, { color: theme.textSecondary }]}>
@@ -1154,14 +984,14 @@ const TodayScreen = () => {
               const top = ((slot.startTime - START_HOUR * 60) / 60) * hourHeight
               const height = (slot.duration / 60) * hourHeight
               const isDone = task.status === 'completed'
-              const pColor = priorityColors[task.priority]
               const totalSubs = task.subtasks?.length || 0
               const doneSubs = task.subtasks?.filter(s => s.completed).length || 0
               const isCompact = height < 50
-              const isDragging = draggingSlot === slot.id
+
+              const isBeingDragged = draggingTask?.id === task.id && draggingSlotRef.current?.id === slot.id
 
               return (
-                <Animated.View
+                <View
                   key={slot.id}
                   style={[
                     styles.timeBlock,
@@ -1169,36 +999,67 @@ const TodayScreen = () => {
                       top,
                       height: Math.max(height, 24),
                       backgroundColor: theme.card,
-                      borderWidth: isDragging ? 2 : 1,
-                      borderColor: isDragging ? theme.primary : theme.border,
-                      borderLeftWidth: 4,
-                      borderLeftColor: pColor,
-                      opacity: isDone ? 0.6 : 1,
-                      transform: isDragging ? [{ translateY: dragOffsetY }] : [],
-                      zIndex: isDragging ? 100 : 5,
-                      elevation: isDragging ? 8 : 2,
+                      borderWidth: isBeingDragged ? 2 : 1,
+                      borderColor: isBeingDragged ? theme.primary : theme.border,
+                      opacity: isBeingDragged ? 0.3 : isDone ? 0.6 : 1,
+                      zIndex: isBeingDragged ? 100 : 5,
+                      elevation: isBeingDragged ? 10 : 2,
                     },
                   ]}
+                  onStartShouldSetResponder={() => true}
+                  onMoveShouldSetResponder={() => true}
+                  onResponderTerminationRequest={() => !draggingTaskRef.current}
+                  onResponderGrant={(e) => {
+                    tapActiveRef.current = true
+                    const { pageX, pageY } = e.nativeEvent
+                    dragPositionRef.current = { x: pageX, y: pageY }
+                    if (!isDone) {
+                      longPressTimerRef.current = setTimeout(() => {
+                        handleDragStart(task, pageX, pageY, slot)
+                      }, 300)
+                    }
+                  }}
+                  onResponderMove={(e) => {
+                    if (draggingTaskRef.current) {
+                      if (Platform.OS !== 'web') {
+                        handleDragMove(e.nativeEvent.pageX, e.nativeEvent.pageY)
+                      }
+                    } else {
+                      const { pageX, pageY } = e.nativeEvent
+                      const dx = Math.abs(pageX - dragPositionRef.current.x)
+                      const dy = Math.abs(pageY - dragPositionRef.current.y)
+                      if (dx > 5 || dy > 5) {
+                        tapActiveRef.current = false
+                        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                      }
+                    }
+                  }}
+                  onResponderRelease={() => {
+                    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                    if (draggingTaskRef.current) {
+                      handleDragEnd()
+                    } else if (tapActiveRef.current) {
+                      setTimeout(() => openTaskDetail(task, slot), 50)
+                    }
+                    tapActiveRef.current = false
+                  }}
+                  onResponderTerminate={() => {
+                    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                    if (draggingTaskRef.current) {
+                      handleDragEnd()
+                    } else if (tapActiveRef.current) {
+                      setTimeout(() => openTaskDetail(task, slot), 50)
+                    }
+                    tapActiveRef.current = false
+                  }}
                 >
-                <TouchableOpacity
-                  style={{ flex: 1 }}
-                  onPress={() => openTaskDetail(task, slot)}
-                  onLongPress={(e) => handleSlotDragStart(slot, e.nativeEvent.pageY)}
-                  onStartShouldSetResponderCapture={() => isDragging}
-                  onMoveShouldSetResponderCapture={() => isDragging}
-                  onMoveShouldSetResponder={() => isDragging}
-                  onResponderMove={(e) => { if (isDragging) handleSlotDragMove(e.nativeEvent.pageY) }}
-                  onResponderRelease={() => { if (isDragging) handleSlotDragEnd(slot) }}
-                  onResponderTerminate={() => { if (isDragging) handleSlotDragEnd(slot) }}
-                  activeOpacity={isDragging ? 1 : 0.7}
-                  delayLongPress={400}
-                >
+                <View style={{ flex: 1 }}>
                   {isCompact ? (
                     <View style={styles.tbCompact}>
                       <Text style={[styles.tbTime, { color: theme.textSecondary }]}>
                         {formatTime(slot.startTime)}
                       </Text>
-                      <Text style={[styles.tbTitleCompact, { color: isDone ? theme.textSecondary : theme.text }]} numberOfLines={1}>
+                      <Text style={[styles.tbTitleCompact, { color: isDone ? theme.textSecondary : TASK_TITLE_COLOR }]} numberOfLines={1}>
                         {task.title}
                       </Text>
                       {isDone && <Ionicons name="checkmark-circle" size={12} color={theme.success} />}
@@ -1219,7 +1080,7 @@ const TodayScreen = () => {
                         </View>
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        <Text style={[styles.tbTitle, { color: isDone ? theme.textSecondary : theme.text, flex: 1 }]} numberOfLines={1}>
+                        <Text style={[styles.tbTitle, { color: isDone ? theme.textSecondary : TASK_TITLE_COLOR, flex: 1 }]} numberOfLines={1}>
                           {task.title}
                         </Text>
                         {(task.postponeCount || 0) >= 3 && !isDone && (
@@ -1228,8 +1089,8 @@ const TodayScreen = () => {
                       </View>
                     </>
                   )}
-                </TouchableOpacity>
-                </Animated.View>
+                </View>
+                </View>
               )
             })}
 
@@ -1240,6 +1101,8 @@ const TodayScreen = () => {
               const goalKey = `${course.id}_${today}`
               const goals = courseGoals[goalKey] || []
               const hasGoals = goals.length > 0
+              const isDragOver = draggingTask && snapMinutes !== null &&
+                snapMinutes >= course.startTime && snapMinutes < course.startTime + course.duration
 
               return (
                 <TouchableOpacity
@@ -1249,11 +1112,10 @@ const TodayScreen = () => {
                     {
                       top,
                       height: Math.max(height, 24),
-                      backgroundColor: `${course.color}18`,
-                      borderWidth: 1,
-                      borderColor: `${course.color}40`,
-                      borderLeftWidth: 4,
-                      borderLeftColor: course.color,
+                      backgroundColor: isDragOver ? `${course.color}30` : `${course.color}18`,
+                      borderWidth: isDragOver ? 2 : 1,
+                      borderColor: isDragOver ? course.color : `${course.color}40`,
+                      borderStyle: isDragOver ? 'dashed' : 'solid',
                     },
                   ]}
                   activeOpacity={hasGoals ? 0.7 : 1}
@@ -1325,17 +1187,64 @@ const TodayScreen = () => {
                 </TouchableOpacity>
               )
             })}
-          </TouchableOpacity>
+
+            {/* Snap indicator line while dragging (hidden when over a course) */}
+            {draggingTask && snapMinutes !== null && !todayCourses.some(c => snapMinutes >= c.startTime && snapMinutes < c.startTime + c.duration) && (
+              <View
+                style={{
+                  position: 'absolute',
+                  top: ((snapMinutes - START_HOUR * 60) / 60) * hourHeight,
+                  left: TIMELINE_LEFT - 8,
+                  right: 0,
+                  zIndex: 200,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                }}
+                pointerEvents="none"
+              >
+                <View style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: theme.primary,
+                  marginRight: -1,
+                }} />
+                <View style={{
+                  flex: 1,
+                  height: 2,
+                  backgroundColor: theme.primary,
+                }} />
+                <View style={{
+                  backgroundColor: theme.primary,
+                  borderRadius: 4,
+                  paddingHorizontal: 6,
+                  paddingVertical: 2,
+                  marginLeft: 4,
+                  marginRight: 8,
+                }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#fff' }}>
+                    {Math.floor(snapMinutes / 60).toString().padStart(2, '0')}:{(snapMinutes % 60).toString().padStart(2, '0')}
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
     )
 
     return (
       <View style={styles.tlContainer}>
         <ScrollView
+          ref={tlScrollViewRef}
           nestedScrollEnabled
-          scrollEnabled={!draggingSlot}
+          scrollEnabled={!draggingTask}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + 8, minHeight: timelineOverflows ? undefined : '100%' }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.primary]} tintColor={theme.primary} />}
+          onScroll={(e) => { scrollYRef.current = e.nativeEvent.contentOffset.y }}
+          onContentSizeChange={(_w, h) => { contentHeightRef.current = h }}
+          onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height }}
+          scrollEventThrottle={16}
         >
           {timelineContent}
         </ScrollView>
@@ -1524,34 +1433,61 @@ const TodayScreen = () => {
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
+                  scrollEnabled={!draggingTask}
                   contentContainerStyle={{ paddingHorizontal: 20, gap: 10, paddingBottom: 4 }}
                 >
                   {unscheduledTasks.map((task) => (
-                    <TouchableOpacity
-                      key={task.id}
-                      style={[
-                        styles.unschedCard,
-                        {
-                          backgroundColor: theme.card,
-                          borderWidth: 1,
-                          borderColor: theme.border,
-                          borderLeftWidth: 4,
-                          borderLeftColor: priorityColors[task.priority],
-                        },
-                      ]}
-                      onPress={() => openTimePickerForTask(task)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[typography.bodyMedium, { color: theme.text }]} numberOfLines={2}>
-                        {task.title}
-                      </Text>
-                      <View style={styles.unschedHintRow}>
-                        <Ionicons name="time-outline" size={11} color={theme.textSecondary} />
-                        <Text style={[typography.small, { color: theme.textSecondary }]}>
-                          点击安排
+                      <View
+                        key={task.id}
+                        style={[
+                          styles.unschedCard,
+                          {
+                            backgroundColor: draggingTask?.id === task.id ? theme.border : theme.card,
+                            borderWidth: 1,
+                            borderColor: theme.border,
+                            opacity: draggingTask?.id === task.id ? 0.4 : 1,
+                          },
+                        ]}
+                        onStartShouldSetResponder={() => true}
+                        onMoveShouldSetResponder={() => !!draggingTask}
+                        onResponderGrant={(e) => {
+                          const { pageX, pageY } = e.nativeEvent
+                          dragPositionRef.current = { x: pageX, y: pageY }
+                          longPressTimerRef.current = setTimeout(() => {
+                            handleDragStart(task, pageX, pageY)
+                          }, 300)
+                        }}
+                        onResponderMove={(e) => {
+                          if (!draggingTask) {
+                            const { pageX, pageY } = e.nativeEvent
+                            const dx = Math.abs(pageX - dragPositionRef.current.x)
+                            const dy = Math.abs(pageY - dragPositionRef.current.y)
+                            if (dx > 5 || dy > 5) {
+                              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                            }
+                          } else if (Platform.OS !== 'web') {
+                            handleDragMove(e.nativeEvent.pageX, e.nativeEvent.pageY)
+                          }
+                        }}
+                        onResponderRelease={() => {
+                          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                          if (draggingTask) handleDragEnd()
+                        }}
+                        onResponderTerminate={() => {
+                          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                          if (draggingTask) handleDragEnd()
+                        }}
+                      >
+                        <Text style={[typography.bodyMedium, { color: TASK_TITLE_COLOR }]} numberOfLines={2}>
+                          {task.title}
                         </Text>
+                        <View style={styles.unschedHintRow}>
+                          <Ionicons name="time-outline" size={11} color={theme.textSecondary} />
+                          <Text style={[typography.small, { color: theme.textSecondary }]}>
+                            长按拖到时间轴
+                          </Text>
+                        </View>
                       </View>
-                    </TouchableOpacity>
                   ))}
                 </ScrollView>
               )}
@@ -1631,8 +1567,8 @@ const TodayScreen = () => {
                   onToggle={toggleTask}
                   onDelete={handleDeleteTask}
                   onToggleSubtask={toggleSubtask}
-                  onLongPress={(t) => openTimePickerForTask(t)}
-                  hint="长按安排到时间轴"
+                  hint=""
+                  projectColor={task.projectId ? projectColorMap.get(task.projectId) : undefined}
                 />
               ))}
             </View>
@@ -1662,6 +1598,7 @@ const TodayScreen = () => {
                     onToggle={toggleTask}
                     onDelete={handleDeleteTask}
                     onToggleSubtask={toggleSubtask}
+                    projectColor={task.projectId ? projectColorMap.get(task.projectId) : undefined}
                   />
                 ))}
             </View>
@@ -1678,43 +1615,6 @@ const TodayScreen = () => {
         </ScrollView>
       )}
       </Animated.View>
-
-      {/* Time picker for a specific task */}
-      <BottomSheet
-        visible={showTimePicker}
-        onClose={() => {
-          setShowTimePicker(false)
-          setSelectedTask(null)
-        }}
-        theme={theme}
-        title="安排时间"
-      >
-        {selectedTask && (
-          <TimePickerContent
-            task={selectedTask}
-            onConfirm={handleSchedule}
-            theme={theme}
-            initialHour={prefillHour}
-            initialMinute={prefillMinute}
-          />
-        )}
-      </BottomSheet>
-
-      {/* Task picker from timeline tap */}
-      <BottomSheet
-        visible={showTaskPicker}
-        onClose={() => setShowTaskPicker(false)}
-        theme={theme}
-        title="安排任务"
-      >
-        <TaskPickerContent
-          tasks={unscheduledTasks}
-          theme={theme}
-          initialHour={prefillHour}
-          initialMinute={prefillMinute}
-          onPick={handleTaskPickSchedule}
-        />
-      </BottomSheet>
 
       {/* Task detail from time block tap */}
       <BottomSheet
@@ -1838,6 +1738,52 @@ const TodayScreen = () => {
       </BottomSheet>
 
       <CelebrationOverlay visible={showCelebration} onFinish={() => setShowCelebration(false)} />
+
+      {/* Floating ghost card while dragging */}
+      {draggingTask && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: dragXY.x - 80,
+            top: dragXY.y - 30,
+            width: 160,
+            zIndex: 9999,
+            elevation: 20,
+          }}
+        >
+          <View style={{
+            backgroundColor: theme.card,
+            borderRadius: 12,
+            padding: 10,
+            borderWidth: 2,
+            borderColor: theme.primary,
+            opacity: 0.9,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.25,
+            shadowRadius: 8,
+            elevation: 12,
+          }}>
+            <Text style={[typography.bodyMedium, { color: TASK_TITLE_COLOR }]} numberOfLines={2}>
+              {draggingTask.title}
+            </Text>
+            {snapMinutes !== null && (() => {
+              const overCourse = todayCourses.find(c => snapMinutes >= c.startTime && snapMinutes < c.startTime + c.duration)
+              return overCourse ? (
+                <Text style={{ fontSize: 11, color: overCourse.color, fontWeight: '600', marginTop: 4 }}>
+                  → {overCourse.name}
+                </Text>
+              ) : (
+                <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '600', marginTop: 4 }}>
+                  {Math.floor(snapMinutes / 60).toString().padStart(2, '0')}:{(snapMinutes % 60).toString().padStart(2, '0')}
+                  {' · '}{draggingSlotRef.current?.duration || draggingTask.estimatedMinutes || 45}分钟
+                </Text>
+              )
+            })()}
+          </View>
+        </View>
+      )}
     </View>
   )
 }
@@ -2081,66 +2027,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  // Task picker
-  taskPickItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    gap: 12,
-  },
-  taskPickDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 16,
-  },
-  // Time picker
-  previewBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 12,
-    borderRadius: 12,
-  },
-  timePickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  pickerChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 6,
-  },
-  pickerChipText: { fontSize: 16, fontWeight: '600' },
-  timeSep: { fontSize: 20, fontWeight: 'bold', marginHorizontal: 6 },
-  durationChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginRight: 8,
-  },
-  durationChipText: { fontSize: 14, fontWeight: '500' },
-  confirmBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    padding: 16,
-    borderRadius: 14,
-    marginTop: 24,
-  },
-  confirmBtnText: { color: 'white', fontSize: 16, fontWeight: '600' },
 })
 
 const detailStyles = StyleSheet.create({
@@ -2158,11 +2044,6 @@ const detailStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginBottom: 20,
-  },
-  priorityDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
   subsSection: {
     marginBottom: 20,

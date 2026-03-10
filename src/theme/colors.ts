@@ -261,6 +261,8 @@ const darkThemes: Record<ThemeColor, ThemeColors> = {
   },
 }
 
+export const TASK_TITLE_COLOR = '#5B8FD4'
+
 export const getTheme = (color: ThemeColor, darkMode: boolean = false): ThemeColors => {
   if (darkMode) return darkThemes[color] || darkThemes.ocean
   return themes[color] || themes.ocean

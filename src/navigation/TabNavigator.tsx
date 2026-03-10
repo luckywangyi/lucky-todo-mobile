@@ -31,7 +31,7 @@ const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarProps) => 
   const insets = useSafeAreaInsets()
 
   return (
-    <View style={[styles.tabBarOuter, { backgroundColor: theme.background, paddingBottom: Math.max(insets.bottom, 12) }]}>
+    <View style={[styles.tabBarOuter, { paddingBottom: Math.max(insets.bottom, 12) }]}>
       <View
         style={[
           styles.tabBar,

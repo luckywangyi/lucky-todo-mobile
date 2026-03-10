@@ -24,7 +24,7 @@ import * as WebBrowser from 'expo-web-browser'
 import { makeRedirectUri } from 'expo-auth-session'
 import Card from '../components/Card'
 import ProgressRing from '../components/ProgressRing'
-import { getAIConfig, saveAIConfig, testConnection, type AIConfig } from '../services/ai'
+import { getAIConfig, saveAIConfig, testConnection, AI_PRESETS, type AIConfig } from '../services/ai'
 import { crossAlert } from '../lib/alert'
 import {
   saveCookie,
@@ -141,6 +141,7 @@ const ProfileScreen = () => {
   const [showApiKey, setShowApiKey] = useState(false)
   const [aiTestStatus, setAiTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
   const [showAISettings, setShowAISettings] = useState(false)
+  const [activePreset, setActivePreset] = useState('dashscope')
 
   // Course schedule settings
   const [showCourseSettings, setShowCourseSettings] = useState(false)
@@ -151,13 +152,31 @@ const ProfileScreen = () => {
   const [showManualImport, setShowManualImport] = useState(false)
 
   useEffect(() => {
-    getAIConfig().then(setAiConfig)
+    getAIConfig().then(cfg => {
+      setAiConfig(cfg)
+      const matched = AI_PRESETS.find(p => p.id !== 'custom' && p.endpoint && cfg.endpoint === p.endpoint)
+      setActivePreset(matched?.id || (cfg.endpoint ? 'custom' : 'dashscope'))
+    })
     getCookie().then(c => c && setHubCookie(c))
     getSemesterStart().then(d => d && setSemesterStartInput(d))
   }, [])
 
   const handleAIConfigChange = (field: keyof AIConfig, value: string) => {
     const newConfig = { ...aiConfig, [field]: value }
+    setAiConfig(newConfig)
+    saveAIConfig(newConfig)
+  }
+
+  const handlePresetSelect = (presetId: string) => {
+    setActivePreset(presetId)
+    const preset = AI_PRESETS.find(p => p.id === presetId)
+    if (!preset) return
+    if (presetId === 'custom') return
+    const newConfig = {
+      endpoint: preset.endpoint || aiConfig.endpoint,
+      apiKey: aiConfig.apiKey,
+      model: preset.model,
+    }
     setAiConfig(newConfig)
     saveAIConfig(newConfig)
   }
@@ -1044,6 +1063,38 @@ const ProfileScreen = () => {
           {showAISettings && (
             <View style={{ marginTop: 16, gap: 12 }}>
               <View>
+                <Text style={[typography.small, { color: theme.textSecondary, marginBottom: 6 }]}>
+                  服务商预设
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
+                  <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: 4 }}>
+                    {AI_PRESETS.map(preset => (
+                      <TouchableOpacity
+                        key={preset.id}
+                        style={{
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                          borderRadius: 14,
+                          backgroundColor: activePreset === preset.id ? theme.primary : theme.surfaceSecondary,
+                          borderWidth: 1,
+                          borderColor: activePreset === preset.id ? theme.primary : theme.border,
+                        }}
+                        onPress={() => handlePresetSelect(preset.id)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={{
+                          fontSize: 12,
+                          fontWeight: '500',
+                          color: activePreset === preset.id ? '#fff' : theme.textSecondary,
+                        }}>
+                          {preset.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+              <View>
                 <Text style={[typography.small, { color: theme.textSecondary, marginBottom: 4 }]}>
                   API Endpoint
                 </Text>
@@ -1051,7 +1102,7 @@ const ProfileScreen = () => {
                   style={[styles.aiInput, { backgroundColor: theme.surfaceSecondary, color: theme.text, borderColor: theme.border }]}
                   value={aiConfig.endpoint}
                   onChangeText={(v) => handleAIConfigChange('endpoint', v)}
-                  placeholder="https://dashscope.aliyuncs.com/compatible-mode"
+                  placeholder={activePreset === 'cursor' ? '填入反代地址，如 https://your-proxy.com' : 'https://api.example.com'}
                   placeholderTextColor={theme.textSecondary}
                   autoCapitalize="none"
                 />
@@ -1065,7 +1116,7 @@ const ProfileScreen = () => {
                     style={[styles.aiInput, { backgroundColor: theme.surfaceSecondary, color: theme.text, borderColor: theme.border, paddingRight: 40 }]}
                     value={aiConfig.apiKey}
                     onChangeText={(v) => handleAIConfigChange('apiKey', v)}
-                    placeholder="sk-..."
+                    placeholder={AI_PRESETS.find(p => p.id === activePreset)?.placeholder || 'API Key'}
                     placeholderTextColor={theme.textSecondary}
                     secureTextEntry={!showApiKey}
                     autoCapitalize="none"
@@ -1086,7 +1137,7 @@ const ProfileScreen = () => {
                   style={[styles.aiInput, { backgroundColor: theme.surfaceSecondary, color: theme.text, borderColor: theme.border }]}
                   value={aiConfig.model}
                   onChangeText={(v) => handleAIConfigChange('model', v)}
-                  placeholder="qwen-plus"
+                  placeholder={AI_PRESETS.find(p => p.id === activePreset)?.model || 'model-name'}
                   placeholderTextColor={theme.textSecondary}
                   autoCapitalize="none"
                 />
@@ -1107,7 +1158,7 @@ const ProfileScreen = () => {
                 </Text>
               </TouchableOpacity>
               <Text style={[typography.small, { color: theme.textSecondary }]}>
-                支持阿里百炼、DeepSeek 等 OpenAI 兼容 API。Key 仅存本地。
+                支持阿里百炼、DeepSeek、Cursor 反代、OpenAI 等兼容 API。Key 仅存本地。
               </Text>
             </View>
           )}

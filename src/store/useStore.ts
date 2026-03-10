@@ -53,6 +53,7 @@ interface AppState {
   updateProjectPhase: (projectId: string, phaseId: string, updates: Partial<ProjectPhase>) => void
   deleteProjectPhase: (projectId: string, phaseId: string) => void
   toggleProjectTask: (projectId: string, phaseId: string, taskId: string) => void
+  promoteProjectTask: (projectId: string, phaseId: string, taskId: string) => string | null
   
   // Habit actions
   addHabit: (habit: Omit<Habit, 'id' | 'createdAt' | 'records'>) => void
@@ -125,21 +126,41 @@ const useStore = create<AppState>((set, get) => ({
   },
 
   updateTask: (id, updates) => {
-    set((state) => ({
-      tasks: state.tasks.map((task) => {
-        if (task.id !== id) return task
-        
-        const updatedTask = { ...task, ...updates, updatedAt: new Date().toISOString() }
-        
-        // 如果主任务标记为完成，自动将所有子任务也标记为完成
-        if (updates.status === 'completed' && (task.subtasks ?? []).length > 0) {
-          updatedTask.subtasks = (task.subtasks ?? []).map(st => ({ ...st, completed: true }))
-        }
-        // 如果主任务标记为未完成，保持子任务状态不变（用户可能只想重新开始部分子任务）
-        
-        return updatedTask
-      }),
-    }))
+    set((state) => {
+      const task = state.tasks.find(t => t.id === id)
+      if (!task) return state
+
+      const updatedTask = { ...task, ...updates, updatedAt: new Date().toISOString() }
+      if (updates.status === 'completed' && (task.subtasks ?? []).length > 0) {
+        updatedTask.subtasks = (task.subtasks ?? []).map(st => ({ ...st, completed: true }))
+      }
+
+      const newTasks = state.tasks.map(t => t.id === id ? updatedTask : t)
+
+      // 双向同步：如果该任务关联了项目，同步完成状态到项目子任务
+      let newProjects = state.projects
+      if (task.projectId && task.phaseId && task.projectTaskId && updates.status) {
+        const targetCompleted = updates.status === 'completed'
+        newProjects = state.projects.map(p => {
+          if (p.id !== task.projectId) return p
+          return {
+            ...p,
+            phases: p.phases.map(ph => {
+              if (ph.id !== task.phaseId) return ph
+              return {
+                ...ph,
+                tasks: ph.tasks.map(t =>
+                  t.id === task.projectTaskId ? { ...t, completed: targetCompleted } : t
+                ),
+              }
+            }),
+            updatedAt: new Date().toISOString(),
+          }
+        })
+      }
+
+      return { tasks: newTasks, projects: newProjects }
+    })
     get().saveData()
   },
 
@@ -268,8 +289,9 @@ const useStore = create<AppState>((set, get) => ({
   },
 
   toggleProjectTask: (projectId, phaseId, taskId) => {
-    set((state) => ({
-      projects: state.projects.map((p) => {
+    set((state) => {
+      let newCompleted = false
+      const newProjects = state.projects.map((p) => {
         if (p.id !== projectId) return p
         return {
           ...p,
@@ -277,14 +299,73 @@ const useStore = create<AppState>((set, get) => ({
             if (ph.id !== phaseId) return ph
             return {
               ...ph,
-              tasks: ph.tasks.map((t) => (t.id === taskId ? { ...t, completed: !t.completed } : t)),
+              tasks: ph.tasks.map((t) => {
+                if (t.id !== taskId) return t
+                newCompleted = !t.completed
+                return { ...t, completed: newCompleted }
+              }),
             }
           }),
           updatedAt: new Date().toISOString(),
         }
-      }),
-    }))
+      })
+
+      // 双向同步：找到关联的日常 Task 并同步状态
+      const newTasks = state.tasks.map(t => {
+        if (t.projectId === projectId && t.phaseId === phaseId && t.projectTaskId === taskId) {
+          return {
+            ...t,
+            status: newCompleted ? 'completed' as const : 'pending' as const,
+            updatedAt: new Date().toISOString(),
+          }
+        }
+        return t
+      })
+
+      return { projects: newProjects, tasks: newTasks }
+    })
     get().saveData()
+  },
+
+  promoteProjectTask: (projectId, phaseId, taskId) => {
+    const state = get()
+    const project = state.projects.find(p => p.id === projectId)
+    if (!project) return null
+    const phase = project.phases.find(ph => ph.id === phaseId)
+    if (!phase) return null
+    const subTask = phase.tasks.find(t => t.id === taskId)
+    if (!subTask) return null
+
+    // 检查是否已经关联
+    const existing = state.tasks.find(
+      t => t.projectId === projectId && t.phaseId === phaseId && t.projectTaskId === taskId && !t.deletedAt
+    )
+    if (existing) return existing.id
+
+    const newId = generateUUID()
+    const now = new Date().toISOString()
+    const today = format(new Date(), 'yyyy-MM-dd')
+
+    const newTask: Task = {
+      id: newId,
+      title: subTask.title,
+      description: `${project.icon} ${project.title} · ${phase.title}`,
+      dueDate: today,
+      priority: 'medium',
+      tags: ['项目任务'],
+      subtasks: [],
+      status: subTask.completed ? 'completed' : 'pending',
+      estimatedMinutes: 30,
+      projectId,
+      phaseId,
+      projectTaskId: taskId,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    set((s) => ({ tasks: [...s.tasks, newTask] }))
+    get().saveData()
+    return newId
   },
 
   addHabit: (habitData) => {
