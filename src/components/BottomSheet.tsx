@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { View, Modal, TouchableOpacity, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Animated, Easing } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -36,60 +36,56 @@ const SheetContent: React.FC<BottomSheetProps> = ({ onClose, theme, title, child
 const WebBottomSheet: React.FC<BottomSheetProps & { tabBarHeight: number }> = (props) => {
   const { visible, onClose, theme, tabBarHeight } = props
   const anim = useRef(new Animated.Value(0)).current
-  const isAnimating = useRef(false)
-  const prevVisible = useRef(false)
+  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
-    if (visible === prevVisible.current) return
-    prevVisible.current = visible
-
-    if (isAnimating.current) anim.stopAnimation()
-
     if (visible) {
-      isAnimating.current = true
-      Animated.spring(anim, {
-        toValue: 1,
-        useNativeDriver: false,
-        damping: 24,
-        stiffness: 160,
-        mass: 0.8,
-      }).start(() => { isAnimating.current = false })
-    } else {
-      isAnimating.current = true
+      setMounted(true)
+      anim.setValue(0)
+      requestAnimationFrame(() => {
+        Animated.spring(anim, {
+          toValue: 1,
+          useNativeDriver: false,
+          damping: 26,
+          stiffness: 140,
+          mass: 0.9,
+        }).start()
+      })
+    } else if (mounted) {
       Animated.timing(anim, {
         toValue: 0,
-        duration: 200,
+        duration: 220,
         easing: Easing.in(Easing.ease),
         useNativeDriver: false,
-      }).start(() => { isAnimating.current = false })
+      }).start(() => setMounted(false))
     }
   }, [visible])
 
+  if (!mounted) return null
+
   const translateY = anim.interpolate({
     inputRange: [0, 1],
-    outputRange: [600, 0],
+    outputRange: [500, 0],
   })
   const backdropOpacity = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 0.35],
+    inputRange: [0, 0.4, 1],
+    outputRange: [0, 0.25, 0.3],
   })
-  const pointerEvents = visible ? 'auto' as const : 'none' as const
 
   return (
-    <View
-      pointerEvents={pointerEvents}
-      style={styles.webOverlay}
-    >
-      <Animated.View style={[styles.webBackdrop, { opacity: backdropOpacity }]}>
+    <View style={[styles.webOverlay, { bottom: tabBarHeight }]}>
+      <Animated.View
+        style={[styles.webBackdrop, { opacity: backdropOpacity }]}
+      >
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
       </Animated.View>
       <Animated.View
         style={[
           styles.sheet,
-          { backgroundColor: theme.card, marginBottom: tabBarHeight, paddingBottom: 24, transform: [{ translateY }] },
+          { backgroundColor: theme.card, paddingBottom: 24, transform: [{ translateY }] },
         ]}
       >
-        {visible && <SheetContent {...props} />}
+        <SheetContent {...props} />
       </Animated.View>
     </View>
   )
@@ -128,6 +124,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 9000,
     justifyContent: 'flex-end',
+    overflow: 'hidden',
   },
   webBackdrop: {
     ...StyleSheet.absoluteFillObject,
