@@ -670,7 +670,7 @@ const ProfileScreen = () => {
         </View>
 
         {/* Name edit modal */}
-        <Modal visible={showNameEdit} transparent animationType="fade" onRequestClose={() => setShowNameEdit(false)}>
+        <Modal visible={showNameEdit} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setShowNameEdit(false)}>
           <TouchableOpacity style={styles.nameModalOverlay} activeOpacity={1} onPress={() => setShowNameEdit(false)}>
             <TouchableOpacity activeOpacity={1} style={[styles.nameModalCard, { backgroundColor: theme.card }]}>
               <Text style={[typography.heading2, { color: theme.text, marginBottom: 16 }]}>修改昵称</Text>
@@ -1251,6 +1251,7 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 20,
     padding: 24,
+    overflow: 'hidden',
   },
   nameInput: {
     borderRadius: 12,

@@ -652,7 +652,6 @@ const ProjectsScreen = () => {
 
       {/* Create Project Modal */}
       <BottomSheet visible={showCreateModal} onClose={resetCreateForm} theme={theme} title="创建项目">
-        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
           <Text style={[typography.label, { color: theme.text, marginBottom: 10 }]}>选择图标</Text>
           <View style={styles.iconGrid}>
             {projectIcons.map(icon => {
@@ -738,7 +737,6 @@ const ProjectsScreen = () => {
               </TouchableOpacity>
             )}
           </View>
-        </ScrollView>
       </BottomSheet>
     </View>
   )

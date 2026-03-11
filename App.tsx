@@ -22,6 +22,7 @@ import { updateReminders } from './src/lib/notifications'
 import { syncWithCloud } from './src/lib/cloudSync'
 import { isSupabaseConfigured } from './src/lib/supabase'
 import { AlertProvider } from './src/components/CustomAlert'
+import SplashAnimation from './src/components/SplashAnimation'
 
 const PERIODIC_SYNC_INTERVAL = 3 * 60 * 1000 // 3分钟定时同步
 const AUTO_SYNC_DELAY = 5000 // 数据变化后5秒防抖同步
@@ -36,6 +37,7 @@ export default function App() {
   const periodicSyncTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const dataSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const initialLoadDone = useRef(false)
+  const [showSplashAnim, setShowSplashAnim] = useState(false)
 
   const runAutoSync = useCallback(async () => {
     const currentUser = useStore.getState().user
@@ -73,6 +75,7 @@ export default function App() {
       initialLoadDone.current = true
       await AsyncStorage.setItem('lucky-todo-onboarding-done', 'true')
       await SplashScreen.hideAsync()
+      setShowSplashAnim(true)
     }
     init()
 
@@ -168,6 +171,9 @@ export default function App() {
           <StatusBar style={darkMode ? 'light' : 'dark'} backgroundColor={theme.background} />
           <TabNavigator />
         </NavigationContainer>
+        {showSplashAnim && (
+          <SplashAnimation onFinish={() => setShowSplashAnim(false)} />
+        )}
       </AlertProvider>
     </SafeAreaProvider>
   )

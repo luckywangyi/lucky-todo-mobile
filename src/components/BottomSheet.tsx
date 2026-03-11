@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { View, Modal, TouchableOpacity, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Animated, Easing } from 'react-native'
+import { View, Modal, TouchableOpacity, Text, StyleSheet, Platform, Animated, Easing, Dimensions } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ThemeColors } from '../theme/colors'
 import { typography } from '../theme/typography'
+
+const SCREEN_HEIGHT = Dimensions.get('window').height
 
 interface BottomSheetProps {
   visible: boolean
@@ -27,9 +29,9 @@ const SheetContent: React.FC<BottomSheetProps> = ({ onClose, theme, title, child
         <Ionicons name="close" size={18} color={theme.textSecondary} />
       </TouchableOpacity>
     </View>
-    <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+    <View style={styles.content}>
       {children}
-    </ScrollView>
+    </View>
   </>
 )
 
@@ -91,8 +93,78 @@ const WebBottomSheet: React.FC<BottomSheetProps & { tabBarHeight: number }> = (p
   )
 }
 
-const BottomSheet: React.FC<BottomSheetProps> = (props) => {
+const NativeBottomSheet: React.FC<BottomSheetProps> = (props) => {
   const { visible, onClose, theme } = props
+  const insets = useSafeAreaInsets()
+  const anim = useRef(new Animated.Value(0)).current
+  const [modalVisible, setModalVisible] = useState(false)
+
+  useEffect(() => {
+    if (visible) {
+      setModalVisible(true)
+      anim.setValue(0)
+      requestAnimationFrame(() => {
+        Animated.spring(anim, {
+          toValue: 1,
+          useNativeDriver: true,
+          damping: 26,
+          stiffness: 140,
+          mass: 0.9,
+        }).start()
+      })
+    } else if (modalVisible) {
+      Animated.timing(anim, {
+        toValue: 0,
+        duration: 250,
+        easing: Easing.in(Easing.ease),
+        useNativeDriver: true,
+      }).start(() => setModalVisible(false))
+    }
+  }, [visible])
+
+  if (!modalVisible) return null
+
+  const backdropOpacity = anim.interpolate({
+    inputRange: [0, 0.4, 1],
+    outputRange: [0, 0.25, 0.3],
+  })
+  const translateY = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [SCREEN_HEIGHT, 0],
+  })
+
+  return (
+    <Modal
+      visible={modalVisible}
+      transparent
+      animationType="none"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={styles.overlay}>
+        <Animated.View
+          style={[styles.backdrop, { opacity: backdropOpacity }]}
+        >
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        </Animated.View>
+        <Animated.View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: theme.card,
+              paddingBottom: insets.bottom + 24,
+              transform: [{ translateY }],
+            },
+          ]}
+        >
+          <SheetContent {...props} />
+        </Animated.View>
+      </View>
+    </Modal>
+  )
+}
+
+const BottomSheet: React.FC<BottomSheetProps> = (props) => {
   const insets = useSafeAreaInsets()
   const tabBarHeight = 64 + insets.bottom
 
@@ -100,19 +172,7 @@ const BottomSheet: React.FC<BottomSheetProps> = (props) => {
     return <WebBottomSheet {...props} tabBarHeight={tabBarHeight} />
   }
 
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.overlay}
-      >
-        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
-        <View style={[styles.sheet, { backgroundColor: theme.card, paddingBottom: insets.bottom + 24 }]}>
-          <SheetContent {...props} />
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  )
+  return <NativeBottomSheet {...props} />
 }
 
 const styles = StyleSheet.create({
@@ -135,14 +195,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
   },
   sheet: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: 40,
     maxHeight: '85%',
+    overflow: 'hidden',
   },
   handleContainer: {
     alignItems: 'center',

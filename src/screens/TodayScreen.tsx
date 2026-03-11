@@ -31,13 +31,13 @@ import CelebrationOverlay from '../components/CelebrationOverlay'
 import { syncWithCloud } from '../lib/cloudSync'
 import { crossAlert } from '../lib/alert'
 import { isSupabaseConfigured } from '../lib/supabase'
-import { generateDailySummary, generateSchedule, isAIConfigured, parseCourseGoal, generateMorningBriefing, generateWeeklyReview, parseScheduleCommand, type DailySummary, type MorningBriefing, type WeeklyReview } from '../services/ai'
+import { generateDailySummary, generateSchedule, isAIConfigured, parseCourseGoal, generateWeeklyReview, parseScheduleCommand, type DailySummary, type WeeklyReview } from '../services/ai'
 // Course filtering now done inline with selectedDate
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 
 const START_HOUR = 8
-const DEFAULT_END_HOUR = 22
+const DEFAULT_END_HOUR = 24
 const TIMELINE_LEFT = 44
 const HEADER_HEIGHT = 100
 const { height: SCREEN_HEIGHT } = Dimensions.get('window')
@@ -393,11 +393,7 @@ const TodayScreen = () => {
     return courses.filter(c => c.dayOfWeek === dayOfWeek && c.weeks.includes(currentWeek))
   }, [courses, semesterStart, selectedDate])
 
-  const effectiveEndHour = useMemo(() => {
-    const hasLate = todaySlots.some(s => s.startTime + s.duration > DEFAULT_END_HOUR * 60)
-      || todayCourses.some(c => c.startTime + c.duration > DEFAULT_END_HOUR * 60)
-    return hasLate ? 23 : DEFAULT_END_HOUR
-  }, [todaySlots, todayCourses])
+  const effectiveEndHour = DEFAULT_END_HOUR
 
   const TAB_BAR_HEIGHT = Math.max(tabBarHeight, 80)
   const MIN_HOUR_HEIGHT = 38
@@ -587,25 +583,6 @@ const TodayScreen = () => {
     setAiScheduling(false)
   }
 
-  // Morning Briefing
-  const [briefing, setBriefing] = useState<MorningBriefing | null>(null)
-  const [briefingLoading, setBriefingLoading] = useState(false)
-  const [briefingDismissed, setBriefingDismissed] = useState(false)
-
-  useEffect(() => {
-    if (!aiAvailable || briefingDismissed || briefing || briefingLoading) return
-    if (!isViewingToday || todayTasks.length === 0) return
-    const hour = new Date().getHours()
-    if (hour < 5 || hour > 11) return
-    setBriefingLoading(true)
-    generateMorningBriefing(
-      todayTasks.map(t => ({ title: t.title, priority: t.priority, status: t.status })),
-      todayCourses.map(c => ({ name: c.name, startTime: c.startTime, duration: c.duration })),
-      todaySlots.map(s => ({ startTime: s.startTime, duration: s.duration, taskId: s.taskId })),
-      habits.map(h => ({ name: h.name, icon: h.icon, records: h.records })),
-      today
-    ).then(setBriefing).catch(() => {}).finally(() => setBriefingLoading(false))
-  }, [aiAvailable, isViewingToday, todayTasks.length])
 
   // Weekly Review
   const [weeklyReview, setWeeklyReview] = useState<WeeklyReview | null>(null)
@@ -664,21 +641,38 @@ const TodayScreen = () => {
         } else if (cmd.action === 'reschedule' && cmd.taskId && cmd.newStartTime) {
           const slotToUpdate = todaySlots.find(s => s.taskId === cmd.taskId)
           if (slotToUpdate) {
-            removeTimeSlot(slotToUpdate.id)
-            addTimeSlot({ taskId: cmd.taskId, date: cmd.newDate || today, startTime: cmd.newStartTime, duration: slotToUpdate.duration })
+            const clamped = clampSlotToTimeline(cmd.newStartTime, slotToUpdate.duration)
+            if (clamped.startTime + clamped.duration > effectiveEndHour * 60) {
+              crossAlert('无法改排', '目标时间超出今日时间范围。')
+            } else {
+              removeTimeSlot(slotToUpdate.id)
+              addTimeSlot({ taskId: cmd.taskId, date: cmd.newDate || today, startTime: clamped.startTime, duration: clamped.duration })
+              const h = Math.floor(clamped.startTime / 60)
+              const m = clamped.startTime % 60
+              crossAlert('已改排', `「${cmd.taskTitle || '任务'}」改到 ${h}:${String(m).padStart(2, '0')}`)
+            }
           }
-          const h = Math.floor(cmd.newStartTime / 60)
-          const m = cmd.newStartTime % 60
-          crossAlert('已改排', `「${cmd.taskTitle || '任务'}」改到 ${h}:${String(m).padStart(2, '0')}`)
         } else if (cmd.action === 'shift' && cmd.shiftMinutes) {
           const slotsToShift = cmd.scope === 'afternoon'
             ? todaySlots.filter(s => s.startTime >= 12 * 60)
             : todaySlots
+          let blocked = 0
           slotsToShift.forEach(s => {
-            removeTimeSlot(s.id)
-            addTimeSlot({ taskId: s.taskId, date: today, startTime: s.startTime + cmd.shiftMinutes!, duration: s.duration })
+            const newStart = s.startTime + cmd.shiftMinutes!
+            const clamped = clampSlotToTimeline(newStart, s.duration)
+            if (clamped.startTime + clamped.duration > effectiveEndHour * 60 || clamped.startTime < START_HOUR * 60) {
+              blocked++
+            } else {
+              removeTimeSlot(s.id)
+              addTimeSlot({ taskId: s.taskId, date: today, startTime: clamped.startTime, duration: s.duration })
+            }
           })
-          crossAlert('已调整', `已将${cmd.scope === 'afternoon' ? '下午' : '所有'}任务${cmd.shiftMinutes > 0 ? '推迟' : '提前'}${Math.abs(cmd.shiftMinutes)}分钟`)
+          const label = cmd.scope === 'afternoon' ? '下午' : '所有'
+          const dir = cmd.shiftMinutes > 0 ? '推迟' : '提前'
+          const msg = blocked > 0
+            ? `已将${label}任务${dir}${Math.abs(cmd.shiftMinutes)}分钟（${blocked}个任务因超出范围未调整）`
+            : `已将${label}任务${dir}${Math.abs(cmd.shiftMinutes)}分钟`
+          crossAlert('已调整', msg)
         }
         setCourseGoalInput('')
         setCourseGoalLoading(false)
@@ -808,9 +802,10 @@ const TodayScreen = () => {
         const maxScroll = Math.max(0, contentHeightRef.current - containerHeightRef.current)
         const newY = Math.max(0, Math.min(scrollYRef.current + speed, maxScroll))
         if (Math.abs(newY - scrollYRef.current) < 0.5) return
+        const scrollDelta = newY - scrollYRef.current
         tlScrollViewRef.current?.scrollTo({ y: newY, animated: false })
         scrollYRef.current = newY
-        measureTimeline()
+        timelineLayoutRef.current.pageY -= scrollDelta
         const snap = computeSnapRef.current(touchY)
         snapMinutesRef.current = snap
         setSnapMinutes(snap)
@@ -884,7 +879,8 @@ const TodayScreen = () => {
         crossAlert('已添加到课程', `「${task.title}」→ ${targetCourse.name}`)
       } else if (existingSlot) {
         const duration = existingSlot.duration
-        let finalStart = snap
+        const clamped = clampSlotToTimeline(snap, duration)
+        let finalStart = clamped.startTime
 
         const courseConflict = todayCourses.find(c =>
           finalStart < c.startTime + c.duration && finalStart + duration > c.startTime
@@ -893,31 +889,35 @@ const TodayScreen = () => {
           finalStart = Math.round((courseConflict.startTime + courseConflict.duration + 5) / 15) * 15
         }
 
-        const courseOccupied = todayCourses.map(c => ({ start: c.startTime, end: c.startTime + c.duration }))
-        const otherSlots = todaySlots.filter(s => s.id !== existingSlot.id)
-        const movedEnd = finalStart + duration
-        const conflicting = otherSlots.filter(s =>
-          finalStart < s.startTime + s.duration && movedEnd > s.startTime
-        )
+        if (finalStart + duration > effectiveEndHour * 60) {
+          crossAlert('无法安排', '该位置会超出今日时间范围。')
+        } else {
+          const courseOccupied = todayCourses.map(c => ({ start: c.startTime, end: c.startTime + c.duration }))
+          const otherSlots = todaySlots.filter(s => s.id !== existingSlot.id)
+          const movedEnd = finalStart + duration
+          const conflicting = otherSlots.filter(s =>
+            finalStart < s.startTime + s.duration && movedEnd > s.startTime
+          )
 
-        for (const cs of conflicting) {
-          let pushTo = Math.round((movedEnd + 5) / 15) * 15
-          let tries = 0
-          while (tries < 20) {
-            const csEnd = pushTo + cs.duration
-            const cc = courseOccupied.find(c => pushTo < c.end && csEnd > c.start)
-            if (!cc) break
-            pushTo = Math.round((cc.end + 5) / 15) * 15
-            tries++
+          for (const cs of conflicting) {
+            let pushTo = Math.round((movedEnd + 5) / 15) * 15
+            let tries = 0
+            while (tries < 20) {
+              const csEnd = pushTo + cs.duration
+              const cc = courseOccupied.find(c => pushTo < c.end && csEnd > c.start)
+              if (!cc) break
+              pushTo = Math.round((cc.end + 5) / 15) * 15
+              tries++
+            }
+            if (pushTo + cs.duration <= effectiveEndHour * 60) {
+              updateTimeSlot(cs.id, { startTime: pushTo })
+            }
           }
-          if (pushTo + cs.duration <= effectiveEndHour * 60) {
-            updateTimeSlot(cs.id, { startTime: pushTo })
-          }
+
+          removeTimeSlot(existingSlot.id)
+          addTimeSlot({ taskId: task.id, date: today, startTime: finalStart, duration })
+          notificationSuccess()
         }
-
-        removeTimeSlot(existingSlot.id)
-        addTimeSlot({ taskId: task.id, date: today, startTime: finalStart, duration })
-        notificationSuccess()
       } else {
         const duration = task.estimatedMinutes || 45
         const added = scheduleSlot(task.id, snap, duration)
@@ -1239,7 +1239,7 @@ const TodayScreen = () => {
           nestedScrollEnabled
           scrollEnabled={!draggingTask}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: TAB_BAR_HEIGHT + 8, minHeight: timelineOverflows ? undefined : '100%' }}
+          contentContainerStyle={{ paddingBottom: bottomSafeSpace, minHeight: timelineOverflows ? undefined : '100%' }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.primary]} tintColor={theme.primary} />}
           onScroll={(e) => { scrollYRef.current = e.nativeEvent.contentOffset.y }}
           onContentSizeChange={(_w, h) => { contentHeightRef.current = h }}
@@ -1346,28 +1346,6 @@ const TodayScreen = () => {
         </View>
       </View>
 
-      {/* Morning Briefing */}
-      {briefing && !briefingDismissed && isViewingToday && (
-        <View style={[styles.briefingCard, { backgroundColor: theme.primary + '10', borderColor: theme.primary + '20' }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: theme.primary, marginBottom: 4 }}>{briefing.greeting}</Text>
-              <Text style={{ fontSize: 12, color: theme.text, marginBottom: 4 }}>{briefing.overview}</Text>
-              {briefing.priorities.length > 0 && (
-                <View style={{ gap: 2 }}>
-                  {briefing.priorities.map((p, i) => (
-                    <Text key={i} style={{ fontSize: 11, color: theme.textSecondary }}>· {p}</Text>
-                  ))}
-                </View>
-              )}
-              <Text style={{ fontSize: 11, color: theme.primary, marginTop: 4, fontStyle: 'italic' }}>{briefing.motivational}</Text>
-            </View>
-            <TouchableOpacity onPress={() => setBriefingDismissed(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Ionicons name="close" size={16} color={theme.textSecondary} />
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
 
       {/* Smart AI input */}
       {aiAvailable && (todayCourses.length > 0 || todaySlots.length > 0) && (
@@ -1933,14 +1911,6 @@ const styles = StyleSheet.create({
   tbSubText: {
     fontSize: 10,
     fontWeight: '500',
-  },
-  briefingCard: {
-    marginHorizontal: 16,
-    marginTop: 4,
-    marginBottom: 4,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
   },
   courseGoalBar: {
     paddingHorizontal: 16,

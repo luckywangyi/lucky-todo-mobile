@@ -163,6 +163,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 24,
     elevation: 10,
+    overflow: 'hidden',
   },
   iconWrap: {
     width: 52,
